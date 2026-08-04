@@ -41,6 +41,28 @@ void main() {
     expect(original['autoControl'], isTrue);
   });
 
+  test('fan curve parser enforces the Core ordering contract', () {
+    expect(
+      app.readFanCurve([
+        {'temperature': 30, 'rpm': 1000},
+        {'temperature': 60, 'rpm': 2200},
+        {'temperature': 90, 'rpm': 3600},
+      ]),
+      const [
+        (temperature: 30, rpm: 1000),
+        (temperature: 60, rpm: 2200),
+        (temperature: 90, rpm: 3600),
+      ],
+    );
+    expect(
+      app.readFanCurve([
+        {'temperature': 30, 'rpm': 2200},
+        {'temperature': 60, 'rpm': 1000},
+      ]),
+      isEmpty,
+    );
+  });
+
   testWidgets('desktop shell fits the minimum window', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -102,6 +124,34 @@ void main() {
     expect(find.text('80W'), findsOneWidget);
     expect(find.text('PawnIO 读取失败'), findsOneWidget);
     expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+  });
+
+  testWidgets('curve page renders the Core curve', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController()
+      ..config = {
+        'fanCurve': [
+          {'temperature': 30, 'rpm': 1000},
+          {'temperature': 60, 'rpm': 2200},
+          {'temperature': 90, 'rpm': 3600},
+        ],
+      }
+      ..temperature = {'controlTemp': 65}
+      ..fanData = {'targetRpm': 2400};
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(home: app.ThrmShell(controller: controller)),
+    );
+    await tester.tap(find.text('曲线').first);
+    await tester.pump();
+
+    expect(find.text('风扇曲线'), findsOneWidget);
+    expect(find.text('3 个控制点 · 当前显示 Core 生效曲线'), findsOneWidget);
+    expect(find.text('控温 65°C'), findsOneWidget);
+    expect(find.text('目标 2400 RPM'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('mouse wheel scrolling animates and accumulates ticks', (

@@ -57,6 +57,33 @@ class _ThrmAppState extends State<ThrmApp> {
 
 enum ThrmPage { status, curve, control, about }
 
+typedef FanCurvePoint = ({int temperature, int rpm});
+
+List<FanCurvePoint> readFanCurve(Object? raw) {
+  if (raw is! List || raw.length < 2) return const [];
+  final points = <FanCurvePoint>[];
+  for (final item in raw) {
+    if (item is! Map) return const [];
+    final temperatureValue = item['temperature'];
+    final rpmValue = item['rpm'];
+    if (temperatureValue is! num || rpmValue is! num) return const [];
+    final temperature = temperatureValue.toInt();
+    final rpm = rpmValue.toInt();
+    if (temperatureValue != temperature ||
+        rpmValue != rpm ||
+        temperature > 110 ||
+        rpm < 0 ||
+        rpm > 4000 ||
+        (points.isNotEmpty &&
+            (temperature <= points.last.temperature ||
+                rpm < points.last.rpm))) {
+      return const [];
+    }
+    points.add((temperature: temperature, rpm: rpm));
+  }
+  return List.unmodifiable(points);
+}
+
 const _pageLabels = ['状态', '曲线', '控制', '关于'];
 const _pageIcons = [
   Icons.dashboard_outlined,
@@ -83,11 +110,13 @@ class ThrmShell extends StatefulWidget {
 class _ThrmShellState extends State<ThrmShell> {
   ThrmPage page = ThrmPage.status;
   final statusScrollController = SmoothScrollController();
+  final curveScrollController = SmoothScrollController();
   final aboutScrollController = SmoothScrollController();
 
   @override
   void dispose() {
     statusScrollController.dispose();
+    curveScrollController.dispose();
     aboutScrollController.dispose();
     super.dispose();
   }
@@ -164,10 +193,9 @@ class _ThrmShellState extends State<ThrmShell> {
       controller: widget.controller,
       scrollController: statusScrollController,
     ),
-    ThrmPage.curve => const PlaceholderPage(
-      icon: Icons.show_chart,
-      title: '曲线页',
-      message: '状态页稳定后迁移曲线与历史。',
+    ThrmPage.curve => FanCurvePage(
+      controller: widget.controller,
+      scrollController: curveScrollController,
     ),
     ThrmPage.control => const PlaceholderPage(
       icon: Icons.tune,
@@ -369,6 +397,237 @@ class MetricCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class FanCurvePage extends StatelessWidget {
+  const FanCurvePage({
+    required this.controller,
+    required this.scrollController,
+    super.key,
+  });
+
+  final AppController controller;
+  final ScrollController scrollController;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final points = readFanCurve(controller.config?['fanCurve']);
+        final temperature = controller.temperature?['controlTemp'] is num
+            ? (controller.temperature!['controlTemp'] as num).toDouble()
+            : controller.temperature?['maxTemp'] is num
+            ? (controller.temperature!['maxTemp'] as num).toDouble()
+            : 0.0;
+        final targetRpm = controller.fanData?['targetRpm'];
+        final colors = Theme.of(context).colorScheme;
+        return ListView(
+          controller: scrollController,
+          padding: const EdgeInsets.all(20),
+          children: [
+            Text('风扇曲线', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+              points.isEmpty
+                  ? '等待 Core 返回有效曲线'
+                  : '${points.length} 个控制点 · 当前显示 Core 生效曲线',
+            ),
+            const SizedBox(height: 16),
+            if (points.isEmpty)
+              const Card(
+                child: ListTile(
+                  leading: Icon(Icons.show_chart),
+                  title: Text('暂无可用曲线'),
+                  subtitle: Text('曲线至少需要两个温度递增、转速非递减的控制点。'),
+                ),
+              )
+            else
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (temperature > 0)
+                            Chip(
+                              avatar: const Icon(Icons.thermostat, size: 18),
+                              label: Text(
+                                '控温 ${temperature.toStringAsFixed(0)}°C',
+                              ),
+                            ),
+                          if (targetRpm is num)
+                            Chip(
+                              avatar: const Icon(Icons.air, size: 18),
+                              label: Text('目标 ${targetRpm.toInt()} RPM'),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Semantics(
+                        label: '风扇曲线，${points.length} 个控制点',
+                        child: RepaintBoundary(
+                          child: SizedBox(
+                            height: 320,
+                            width: double.infinity,
+                            child: CustomPaint(
+                              painter: FanCurvePainter(
+                                points: points,
+                                currentTemperature: temperature,
+                                curveColor: colors.primary,
+                                markerColor: colors.tertiary,
+                                gridColor: colors.outlineVariant,
+                                labelColor: colors.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class FanCurvePainter extends CustomPainter {
+  const FanCurvePainter({
+    required this.points,
+    required this.currentTemperature,
+    required this.curveColor,
+    required this.markerColor,
+    required this.gridColor,
+    required this.labelColor,
+  });
+
+  final List<FanCurvePoint> points;
+  final double currentTemperature;
+  final Color curveColor;
+  final Color markerColor;
+  final Color gridColor;
+  final Color labelColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final chart = Rect.fromLTRB(48, 16, size.width - 12, size.height - 32);
+    if (chart.width <= 0 || chart.height <= 0 || points.length < 2) return;
+
+    final grid = Paint()
+      ..color = gridColor
+      ..strokeWidth = 1;
+    for (var index = 0; index <= 4; index++) {
+      final fraction = index / 4;
+      final x = chart.left + chart.width * fraction;
+      final y = chart.top + chart.height * fraction;
+      canvas.drawLine(Offset(x, chart.top), Offset(x, chart.bottom), grid);
+      canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), grid);
+      _label(
+        canvas,
+        '${(4000 * (1 - fraction)).round()}',
+        Offset(chart.left - 8, y),
+        alignRight: true,
+      );
+      final temperature =
+          points.first.temperature +
+          (points.last.temperature - points.first.temperature) * fraction;
+      _label(
+        canvas,
+        '${temperature.round()}°',
+        Offset(x, chart.bottom + 8),
+        centered: true,
+      );
+    }
+
+    Offset position(FanCurvePoint point) => Offset(
+      chart.left +
+          chart.width *
+              (point.temperature - points.first.temperature) /
+              (points.last.temperature - points.first.temperature),
+      chart.bottom - chart.height * point.rpm / 4000,
+    );
+
+    final path = Path();
+    for (var index = 0; index < points.length; index++) {
+      final offset = position(points[index]);
+      if (index == 0) {
+        path.moveTo(offset.dx, offset.dy);
+      } else {
+        path.lineTo(offset.dx, offset.dy);
+      }
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = curveColor
+        ..strokeWidth = 3
+        ..style = PaintingStyle.stroke,
+    );
+    final pointPaint = Paint()..color = curveColor;
+    for (final point in points) {
+      canvas.drawCircle(position(point), 4, pointPaint);
+    }
+
+    if (currentTemperature >= points.first.temperature &&
+        currentTemperature <= points.last.temperature) {
+      final x =
+          chart.left +
+          chart.width *
+              (currentTemperature - points.first.temperature) /
+              (points.last.temperature - points.first.temperature);
+      canvas.drawLine(
+        Offset(x, chart.top),
+        Offset(x, chart.bottom),
+        Paint()
+          ..color = markerColor
+          ..strokeWidth = 2,
+      );
+    }
+  }
+
+  void _label(
+    Canvas canvas,
+    String text,
+    Offset offset, {
+    bool alignRight = false,
+    bool centered = false,
+  }) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(color: labelColor, fontSize: 11),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    painter.paint(
+      canvas,
+      Offset(
+        offset.dx -
+            (alignRight
+                ? painter.width
+                : centered
+                ? painter.width / 2
+                : 0),
+        offset.dy - (alignRight ? painter.height / 2 : 0),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRepaint(FanCurvePainter oldDelegate) =>
+      oldDelegate.points != points ||
+      oldDelegate.currentTemperature != currentTemperature ||
+      oldDelegate.curveColor != curveColor ||
+      oldDelegate.markerColor != markerColor ||
+      oldDelegate.gridColor != gridColor ||
+      oldDelegate.labelColor != labelColor;
 }
 
 class PlaceholderPage extends StatelessWidget {
