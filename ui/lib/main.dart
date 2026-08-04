@@ -1393,6 +1393,8 @@ class _TemperatureHistoryCard extends StatefulWidget {
 }
 
 class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
+  static const drawPointLimit = 1500;
+
   late List<TemperatureHistoryPoint> points;
   late int gapThreshold;
 
@@ -1413,7 +1415,11 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
   }
 
   void _syncPoints() {
-    points = downsampleTemperatureHistory(widget.snapshot.points, 600);
+    points = downsampleTemperatureHistory(
+      widget.snapshot.points,
+      drawPointLimit,
+      widget.snapshot.sampleIntervalSeconds,
+    );
     gapThreshold = temperatureHistoryGapThreshold(
       points,
       widget.snapshot.sampleIntervalSeconds,

@@ -103,19 +103,36 @@ TemperatureHistorySnapshot appendTemperatureHistoryPoint(
 List<TemperatureHistoryPoint> downsampleTemperatureHistory(
   List<TemperatureHistoryPoint> points,
   int maxPoints,
+  int sampleIntervalSeconds,
 ) {
   if (maxPoints <= 0 || points.length <= maxPoints) return points;
   if (maxPoints == 1) return [points.last];
   final stride = (points.length / maxPoints).ceil();
+  final bucketWidth =
+      _temperatureHistoryCadence(points, sampleIntervalSeconds) * stride;
   final result = <TemperatureHistoryPoint>[];
-  for (var index = 0; index < points.length; index += stride) {
-    result.add(points[index]);
+  // 时间桶固定在时间轴上，滑动窗口删掉首点时不会让其余采样全部换位。
+  var previousBucket = -1;
+  for (final point in points) {
+    final bucket = point.timestamp ~/ bucketWidth;
+    if (bucket != previousBucket) {
+      result.add(point);
+      previousBucket = bucket;
+    }
   }
   if (result.last != points.last) result.add(points.last);
   return List.unmodifiable(result);
 }
 
 int temperatureHistoryGapThreshold(
+  List<TemperatureHistoryPoint> points,
+  int sampleIntervalSeconds,
+) {
+  final cadence = _temperatureHistoryCadence(points, sampleIntervalSeconds);
+  return math.max(30000, cadence * 3);
+}
+
+int _temperatureHistoryCadence(
   List<TemperatureHistoryPoint> points,
   int sampleIntervalSeconds,
 ) {
@@ -130,8 +147,7 @@ int temperatureHistoryGapThreshold(
       : deltas.length.isOdd
       ? deltas[deltas.length ~/ 2]
       : (deltas[deltas.length ~/ 2 - 1] + deltas[deltas.length ~/ 2]) ~/ 2;
-  final cadence = math.max(median, sampleIntervalSeconds * 1000);
-  return math.max(30000, cadence * 3);
+  return math.max(median, math.max(1, sampleIntervalSeconds) * 1000);
 }
 
 List<TemperatureHistoryPoint> _normalizeHistoryPoints(

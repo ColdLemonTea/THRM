@@ -124,11 +124,35 @@ void main() {
       'gpuTemp': 62,
       'fanRpm': 2100,
     });
-    expect(downsampleTemperatureHistory(appended.points, 2), [
+    expect(downsampleTemperatureHistory(appended.points, 2, 5), [
       appended.points.first,
       appended.points.last,
     ]);
     expect(temperatureHistoryGapThreshold(appended.points, 5), 30000);
+
+    final rolling = readTemperatureHistorySnapshot({
+      'enabled': true,
+      'sampleIntervalSeconds': 5,
+      'retentionHours': 1,
+      'points': [
+        for (var index = 0; index < 10; index++)
+          {'timestamp': 1700000000000 + index * 5000, 'cpuTemp': 40 + index},
+      ],
+    }).points;
+    final before = downsampleTemperatureHistory(rolling.sublist(0, 9), 4, 5);
+    final after = downsampleTemperatureHistory(rolling.sublist(1), 4, 5);
+    expect(
+      before.where(
+        (point) =>
+            point.timestamp >= rolling[2].timestamp &&
+            point.timestamp <= rolling[8].timestamp,
+      ),
+      after.where(
+        (point) =>
+            point.timestamp >= rolling[2].timestamp &&
+            point.timestamp <= rolling[8].timestamp,
+      ),
+    );
   });
 
   testWidgets('desktop shell fits the minimum window', (tester) async {
