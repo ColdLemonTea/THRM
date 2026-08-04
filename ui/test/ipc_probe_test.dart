@@ -63,6 +63,25 @@ void main() {
     );
   });
 
+  test('fan curve RPM editing rounds, clamps, and preserves order', () {
+    const curve = [
+      (temperature: 30, rpm: 1500),
+      (temperature: 60, rpm: 2000),
+      (temperature: 90, rpm: 3000),
+    ];
+    expect(app.syncFanCurveRpmAtIndex(curve, 1, 1274), const [
+      (temperature: 30, rpm: 1250),
+      (temperature: 60, rpm: 1250),
+      (temperature: 90, rpm: 3000),
+    ]);
+    expect(app.syncFanCurveRpmAtIndex(curve, 1, 3749), const [
+      (temperature: 30, rpm: 1500),
+      (temperature: 60, rpm: 3750),
+      (temperature: 90, rpm: 3750),
+    ]);
+    expect(app.syncFanCurveRpmAtIndex(curve, 2, 9999).last.rpm, 4000);
+  });
+
   testWidgets('desktop shell fits the minimum window', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -152,6 +171,72 @@ void main() {
     expect(find.text('控温 65°C'), findsOneWidget);
     expect(find.text('目标 2400 RPM'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('curve edits can be discarded and low RPM saves are confirmed', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = _RecordingIpcClient();
+    final controller = AppController(client: client)
+      ..connection = CoreConnection.connected
+      ..config = {
+        'fanCurve': [
+          {'temperature': 30, 'rpm': 1000},
+          {'temperature': 60, 'rpm': 2200},
+          {'temperature': 90, 'rpm': 3600},
+        ],
+        'unknown': {'preserved': true},
+      };
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.FanCurvePage(
+            controller: controller,
+            scrollController: scrollController,
+          ),
+        ),
+      ),
+    );
+
+    Future<void> dragFirstPointLow() async {
+      await tester.drag(
+        find.byKey(const ValueKey('fan-curve-point-0')),
+        const Offset(0, 60),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('有未保存修改'), findsOneWidget);
+    }
+
+    await dragFirstPointLow();
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(find.text('低转速风险'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(client.requests, isEmpty);
+
+    await tester.tap(find.text('放弃修改'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('有未保存修改'), findsNothing);
+
+    await dragFirstPointLow();
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('仍然保存'));
+    await tester.pumpAndSettle();
+
+    expect(client.requests.single.type, 'SetFanCurve');
+    final sentCurve = client.requests.single.data as List<dynamic>;
+    expect((sentCurve.first as Map<String, dynamic>)['rpm'], lessThan(1000));
+    expect(controller.config?['fanCurve'], sentCurve);
+    expect(controller.config?['unknown'], {'preserved': true});
+    expect(find.textContaining('有未保存修改'), findsNothing);
   });
 
   testWidgets('mouse wheel scrolling animates and accumulates ticks', (
@@ -269,6 +354,17 @@ void main() {
           await controller.setAutoControl(false);
           expect(controller.config?['autoControl'], isFalse);
           expect(controller.config?['unknown'], {'preserved': true});
+          const curve = <Map<String, int>>[
+            {'temperature': 30, 'rpm': 900},
+            {'temperature': 60, 'rpm': 2300},
+            {'temperature': 90, 'rpm': 3700},
+          ];
+          expect(await controller.setFanCurve(curve), isTrue);
+          expect(controller.config?['fanCurve'], curve);
+          expect(controller.config?['unknown'], {'preserved': true});
+          final fixtureConfig =
+              await probe.request('GetConfig') as Map<String, dynamic>;
+          expect(fixtureConfig['fanCurve'], curve);
         } finally {
           controller.dispose();
         }
@@ -295,4 +391,19 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 35)),
   );
+}
+
+class _RecordingIpcClient extends IpcClient {
+  _RecordingIpcClient() : super(endpoint: 'test');
+
+  final requests = <({String type, Object? data})>[];
+
+  @override
+  bool get isConnected => true;
+
+  @override
+  Future<Object?> request(String type, {Object? data}) async {
+    requests.add((type: type, data: data));
+    return true;
+  }
 }

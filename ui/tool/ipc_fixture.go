@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/TIANLI0/THRM/internal/ipc"
+	"github.com/TIANLI0/THRM/internal/types"
 )
 
 func response(data any) ipc.Response {
@@ -19,6 +20,11 @@ func main() {
 	restart := make(chan struct{}, 1)
 	quit := make(chan struct{}, 1)
 	autoControl := true
+	fanCurve := []types.FanCurvePoint{
+		{Temperature: 30, RPM: 1000},
+		{Temperature: 60, RPM: 2200},
+		{Temperature: 90, RPM: 3600},
+	}
 	handler := func(req ipc.Request) ipc.Response {
 		switch req.Type {
 		case ipc.ReqPing:
@@ -34,6 +40,7 @@ func main() {
 		case ipc.ReqGetConfig:
 			return response(map[string]any{
 				"autoControl": autoControl,
+				"fanCurve":    fanCurve,
 				"blob":        strings.Repeat("x", 16*1024),
 				"unknown":     map[string]bool{"preserved": true},
 			})
@@ -43,6 +50,13 @@ func main() {
 				return ipc.Response{Success: false, Error: err.Error()}
 			}
 			autoControl = data.Enabled
+			return response(true)
+		case ipc.ReqSetFanCurve:
+			var data []types.FanCurvePoint
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			fanCurve = data
 			return response(true)
 		case ipc.ReqGetDeviceStatus:
 			return response(map[string]any{

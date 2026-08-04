@@ -57,6 +57,7 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic>? temperature;
   bool deviceConnected = false;
   bool updatingAutoControl = false;
+  bool updatingFanCurve = false;
 
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   bool _started = false;
@@ -127,6 +128,24 @@ class AppController extends ChangeNotifier {
       error = '设置智能控温失败：$caught';
     } finally {
       updatingAutoControl = false;
+      _notify();
+    }
+  }
+
+  Future<bool> setFanCurve(List<Map<String, int>> curve) async {
+    if (!client.isConnected || updatingFanCurve) return false;
+    updatingFanCurve = true;
+    error = null;
+    _notify();
+    try {
+      await client.request('SetFanCurve', data: curve);
+      config = patchConfig(config, {'fanCurve': curve});
+      return true;
+    } catch (caught) {
+      error = '保存风扇曲线失败：$caught';
+      return false;
+    } finally {
+      updatingFanCurve = false;
       _notify();
     }
   }
