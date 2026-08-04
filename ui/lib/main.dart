@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_controller.dart';
 import 'smooth_scroll.dart';
@@ -34,6 +35,9 @@ class _ThrmAppState extends State<ThrmApp> {
     return MaterialApp(
       title: 'THRM',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('zh', 'CN'),
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      supportedLocales: const [Locale('zh', 'CN')],
       themeMode: ThemeMode.system,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff6750a4)),

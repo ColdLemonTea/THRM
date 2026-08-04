@@ -41,6 +41,17 @@ jobs:
           flutter pub get
           flutter build linux --profile
 
+      - name: Verify Wayland desktop registration helper
+        working-directory: ui
+        run: |
+          test_data_dir="$(mktemp -d)"
+          XDG_DATA_HOME="$test_data_dir" \
+            build/linux/x64/profile/bundle/register-wayland-icon.sh
+          test -f "$test_data_dir/applications/com.tianli0.thrm_ui.desktop"
+          test -f "$test_data_dir/icons/hicolor/256x256/apps/com.tianli0.thrm_ui.png"
+          grep -q '^Icon=com.tianli0.thrm_ui$' \
+            "$test_data_dir/applications/com.tianli0.thrm_ui.desktop"
+
       - name: Package bundle
         run: |
           tar -C ui/build/linux/x64/profile -czf THRM-flutter-linux-x64-profile.tar.gz bundle

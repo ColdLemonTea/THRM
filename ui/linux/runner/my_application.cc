@@ -1,9 +1,6 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
-#ifdef GDK_WINDOWING_WAYLAND
-#include <gdk/gdkwayland.h>
-#endif
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
@@ -84,12 +81,6 @@ static void my_application_activate(GApplication* application) {
   g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb),
                            self);
   gtk_widget_realize(GTK_WIDGET(view));
-#ifdef GDK_WINDOWING_WAYLAND
-  GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
-  if (gdk_window != nullptr && GDK_IS_WAYLAND_WINDOW(gdk_window)) {
-    gdk_wayland_window_set_application_id(gdk_window, "thrm");
-  }
-#endif
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 

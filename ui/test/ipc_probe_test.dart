@@ -47,6 +47,19 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('app supplies zh-CN locale for consistent CJK fallback', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const app.ThrmApp());
+    await tester.pump();
+    expect(
+      Localizations.localeOf(tester.element(find.byType(Scaffold))),
+      const Locale('zh', 'CN'),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 6));
+  });
+
   testWidgets('mouse wheel scrolling animates and accumulates ticks', (
     tester,
   ) async {
