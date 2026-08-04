@@ -2,10 +2,49 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:thrm_ui/app_controller.dart';
 import 'package:thrm_ui/ipc_probe.dart';
+import 'package:thrm_ui/main.dart' as app;
 
 void main() {
+  test('temperature deltas preserve sensor metadata', () {
+    final merged = mergeTemperatureMetadata(
+      {
+        'cpuTemp': 50,
+        'cpuModel': 'CPU',
+        'gpuModel': 'GPU',
+        'cpuSensors': ['package'],
+      },
+      {'cpuTemp': 60, 'gpuModel': ''},
+    );
+    expect(merged, {
+      'cpuTemp': 60,
+      'cpuModel': 'CPU',
+      'gpuModel': 'GPU',
+      'cpuSensors': ['package'],
+    });
+  });
+
+  testWidgets('desktop shell fits the minimum window', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(home: app.ThrmShell(controller: controller)),
+    );
+    expect(find.text('THRM · 状态'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('关于'));
+    await tester.pump();
+    expect(find.text('Flutter 3 渲染实验'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   test(
     'Go IPC handles Dart framing, concurrency, events, and reconnect',
     () async {
@@ -37,8 +76,8 @@ void main() {
       final stderrSubscription = fixture.stderr
           .transform(utf8.decoder)
           .listen(stderr.write);
-      final probe = IpcProbe(
-        endpoint: IpcProbe.endpointForPipe(pipeName),
+      final probe = IpcClient(
+        endpoint: IpcClient.endpointForPipe(pipeName),
         timeout: const Duration(seconds: 5),
       );
 
@@ -60,11 +99,37 @@ void main() {
         final config = await configFuture as Map<String, dynamic>;
         expect((config['blob'] as String).length, 16 * 1024);
         expect(config['unknown'], {'preserved': true});
+        final status =
+            await probe.request('GetDeviceStatus') as Map<String, dynamic>;
+        expect(status['connected'], isTrue);
+        expect(
+          (status['currentData'] as Map<String, dynamic>)['currentRpm'],
+          2345,
+        );
         final event = await eventFuture;
         expect(
           ((event['data'] as Map<String, dynamic>)['blob'] as String).length,
           8 * 1024,
         );
+
+        final controller = AppController(
+          client: IpcClient(
+            endpoint: IpcClient.endpointForPipe(pipeName),
+            timeout: const Duration(seconds: 5),
+          ),
+        )..start();
+        try {
+          for (var attempt = 0; attempt < 100; attempt++) {
+            if (controller.connection == CoreConnection.connected) break;
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+          expect(controller.connection, CoreConnection.connected);
+          expect(controller.deviceConnected, isTrue);
+          expect(controller.deviceStatus?['model'], 'THRM fixture');
+          expect(controller.config?['unknown'], {'preserved': true});
+        } finally {
+          controller.dispose();
+        }
 
         final disconnected = probe.disconnected;
         expect(await probe.request('RestartProbe'), 'restarting');

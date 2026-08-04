@@ -93,8 +93,9 @@ Flutter 3 GUI
   `.github/workflows/flutter-linux-experiment.yml` 生成的 profile bundle，解压后直接做渲染验收；
   实验分支推送时自动构建，workflow 进入默认分支后也可手动触发。
 
-阶段 0 尚未退出：Linux 构建、X11/XWayland，以及原 NVIDIA + KWin + Wayland 机器上的
-撕裂和窗口协议实测仍待完成。
+用户已在目标 Linux 机器确认 Wayland 与 XWayland profile bundle 基础运行流畅，阶段 0 的
+基础渲染门槛通过，可以开始最小外壳和状态页迁移。多显示器、高刷新率、休眠唤醒与长时间运行
+仍保留为发布前验收项，不能由这次基础烟雾测试替代。
 
 ## 阶段 1：Flutter 外壳与 IPC
 

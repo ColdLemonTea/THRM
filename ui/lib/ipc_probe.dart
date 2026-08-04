@@ -6,8 +6,8 @@ import 'package:dart_ipc/dart_ipc.dart' as ipc;
 
 const _protocolVersion = '3.0';
 
-class IpcProbe {
-  IpcProbe({String? endpoint, this.timeout = const Duration(seconds: 3)})
+class IpcClient {
+  IpcClient({String? endpoint, this.timeout = const Duration(seconds: 3)})
     : endpoint = endpoint ?? endpointForPipe('THRM-IPC');
 
   final String endpoint;
@@ -30,6 +30,7 @@ class IpcProbe {
 
   Stream<Map<String, dynamic>> get events => _events.stream;
   Future<void> get disconnected => _disconnectSignal?.future ?? Future.value();
+  bool get isConnected => _socket != null;
 
   Future<void> connect() async {
     if (_socket != null) return;
@@ -199,7 +200,7 @@ class IpcProbe {
 Future<({int configBytes, String eventType})> runIpcProbe({
   String? endpoint,
 }) async {
-  final probe = IpcProbe(endpoint: endpoint);
+  final probe = IpcClient(endpoint: endpoint);
   try {
     await probe.connect();
     final event = probe.events.first.timeout(

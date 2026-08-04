@@ -32,8 +32,25 @@ func main() {
 			return response("pong")
 		case ipc.ReqGetConfig:
 			return response(map[string]any{
-				"blob":    strings.Repeat("x", 16*1024),
-				"unknown": map[string]bool{"preserved": true},
+				"autoControl": true,
+				"blob":        strings.Repeat("x", 16*1024),
+				"unknown":     map[string]bool{"preserved": true},
+			})
+		case ipc.ReqGetDeviceStatus:
+			return response(map[string]any{
+				"connected": true,
+				"model":     "THRM fixture",
+				"productId": "0x0001",
+				"currentData": map[string]any{
+					"currentRpm": 2345,
+					"targetRpm":  2500,
+					"workMode":   "fixture",
+				},
+				"temperature": map[string]any{
+					"cpuTemp": 55,
+					"gpuTemp": 60,
+					"maxTemp": 60,
+				},
 			})
 		case ipc.RequestType("RestartProbe"):
 			go func() {
