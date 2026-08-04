@@ -16,6 +16,10 @@ namespace {
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
+
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
 /// Registry key for app theme preference.
@@ -285,4 +289,10 @@ void Win32Window::UpdateTheme(HWND const window) {
     DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
                           &enable_dark_mode, sizeof(enable_dark_mode));
   }
+
+  const MARGINS margins = {-1};
+  DwmExtendFrameIntoClientArea(window, &margins);
+  const DWORD backdrop_type = 2;  // DWMSBT_MAINWINDOW
+  DwmSetWindowAttribute(window, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type,
+                        sizeof(backdrop_type));
 }

@@ -62,6 +62,8 @@ class AppController extends ChangeNotifier {
   bool updatingAutoControl = false;
   bool updatingFanCurve = false;
   bool updatingFanCurveProfile = false;
+  bool updatingFanFeatures = false;
+  bool updatingManualGear = false;
   bool updatingTemperatureHistory = false;
 
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
@@ -281,6 +283,77 @@ class AppController extends ChangeNotifier {
       return false;
     } finally {
       updatingFanCurveProfile = false;
+      _notify();
+    }
+  }
+
+  Future<bool> updateConfig(
+    Map<String, dynamic> patch, {
+    String action = '保存设置',
+  }) async {
+    if (!client.isConnected || config == null || updatingFanFeatures) {
+      return false;
+    }
+    updatingFanFeatures = true;
+    error = null;
+    _notify();
+    final next = patchConfig(config, patch);
+    try {
+      await client.request('UpdateConfig', data: next);
+      config = next;
+      return true;
+    } catch (caught) {
+      error = '$action失败：$caught';
+      return false;
+    } finally {
+      updatingFanFeatures = false;
+      _notify();
+    }
+  }
+
+  Future<bool> resetLearnedOffsets() async {
+    if (!client.isConnected || updatingFanFeatures) return false;
+    updatingFanFeatures = true;
+    error = null;
+    _notify();
+    try {
+      await client.request('ResetLearnedOffsets');
+      config = _jsonMap(await client.request('GetConfig'), 'GetConfig');
+      return true;
+    } catch (caught) {
+      error = '重置学习偏移失败：$caught';
+      return false;
+    } finally {
+      updatingFanFeatures = false;
+      _notify();
+    }
+  }
+
+  Future<bool> setManualGear(String gear, String level) async {
+    if (!client.isConnected || updatingManualGear) return false;
+    updatingManualGear = true;
+    error = null;
+    _notify();
+    try {
+      await client.request(
+        'SetManualGear',
+        data: {'gear': gear, 'level': level},
+      );
+      final remembered = <String, dynamic>{};
+      final rawRemembered = config?['manualGearLevels'];
+      if (rawRemembered is Map) remembered.addAll(rawRemembered.cast());
+      remembered[gear] = level;
+      config = patchConfig(config, {
+        'manualGear': gear,
+        'manualLevel': level,
+        'manualGearLevels': remembered,
+      });
+      return true;
+    } catch (caught) {
+      error = '切换手动挡位失败：$caught';
+      return false;
+    } finally {
+      updatingManualGear = false;
       _notify();
     }
   }

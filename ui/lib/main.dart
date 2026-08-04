@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 
 import 'package:fluent_ui/fluent_ui.dart' as fluent;
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -11,11 +12,18 @@ import 'temperature_history.dart';
 
 void main() => runApp(const ThrmApp());
 
-fluent.FluentThemeData _fluentTheme(Brightness brightness) =>
-    fluent.FluentThemeData(
-      brightness: brightness,
-      accentColor: fluent.Colors.blue,
-    );
+fluent.FluentThemeData _fluentTheme(Brightness brightness) {
+  final systemMica = defaultTargetPlatform == TargetPlatform.windows;
+  return fluent.FluentThemeData(
+    brightness: brightness,
+    accentColor: fluent.Colors.blue,
+    navigationPaneTheme: systemMica
+        ? const fluent.NavigationPaneThemeData(
+            backgroundColor: Colors.transparent,
+          )
+        : null,
+  );
+}
 
 class ThrmApp extends StatefulWidget {
   const ThrmApp({super.key});
@@ -60,6 +68,8 @@ enum ThrmPage { status, curve, control, about }
 
 typedef FanCurvePoint = ({int temperature, int rpm});
 typedef FanCurveProfileOption = ({String id, String name});
+typedef ManualGearLevel = ({String level, int rpm});
+typedef ManualGearPreset = ({String gear, List<ManualGearLevel> levels});
 
 List<FanCurvePoint> readFanCurve(Object? raw) {
   if (raw is! List || raw.length < 2) return const [];
@@ -124,6 +134,270 @@ List<FanCurvePoint> syncFanCurveRpmAtIndex(
   return List.unmodifiable(next);
 }
 
+List<FanCurvePoint> _learnedFanCurve(
+  List<FanCurvePoint> baseCurve,
+  Object? rawOffsets,
+  Object? rawBias,
+) {
+  if (baseCurve.isEmpty || rawOffsets is! List) return const [];
+  final minRpm = baseCurve.map((point) => point.rpm).reduce(math.min);
+  final maxRpm = baseCurve.map((point) => point.rpm).reduce(math.max);
+  final bias = rawBias == 'cooling' || rawBias == 'quiet'
+      ? rawBias
+      : 'balanced';
+  var hasOffset = false;
+  final learned = <FanCurvePoint>[];
+  for (var index = 0; index < baseCurve.length; index++) {
+    final offset = constrainLearningOffset(
+      index < rawOffsets.length && rawOffsets[index] is num
+          ? (rawOffsets[index] as num).toInt()
+          : 0,
+      bias,
+    );
+    hasOffset |= offset != 0;
+    learned.add((
+      temperature: baseCurve[index].temperature,
+      rpm: (baseCurve[index].rpm + offset).clamp(minRpm, maxRpm),
+    ));
+  }
+  return hasOffset ? List.unmodifiable(learned) : const [];
+}
+
+int constrainLearningOffset(int offset, Object? bias) =>
+    (bias == 'cooling' && offset < 0) || (bias == 'quiet' && offset > 0)
+    ? 0
+    : offset;
+
+List<({int index, int temperature, int rpm})> summarizeLearnedOffsets(
+  List<FanCurvePoint> curve,
+  Object? rawOffsets,
+  Object? bias,
+) {
+  if (rawOffsets is! List) return const [];
+  final offsets = <({int index, int temperature, int rpm})>[];
+  for (
+    var index = 0;
+    index < curve.length && index < rawOffsets.length;
+    index++
+  ) {
+    final raw = rawOffsets[index];
+    final rpm = constrainLearningOffset(raw is num ? raw.round() : 0, bias);
+    if (rpm != 0) {
+      offsets.add((
+        index: index,
+        temperature: curve[index].temperature,
+        rpm: rpm,
+      ));
+    }
+  }
+  offsets.sort((left, right) {
+    final magnitude = right.rpm.abs().compareTo(left.rpm.abs());
+    return magnitude != 0 ? magnitude : left.index.compareTo(right.index);
+  });
+  return List.unmodifiable(offsets.take(4));
+}
+
+const manualGearPresets = <ManualGearPreset>[
+  (
+    gear: '静音',
+    levels: [
+      (level: '低', rpm: 1300),
+      (level: '中', rpm: 1700),
+      (level: '高', rpm: 1900),
+    ],
+  ),
+  (
+    gear: '标准',
+    levels: [
+      (level: '低', rpm: 2100),
+      (level: '中', rpm: 2400),
+      (level: '高', rpm: 2700),
+    ],
+  ),
+  (
+    gear: '强劲',
+    levels: [
+      (level: '低', rpm: 2800),
+      (level: '中', rpm: 3000),
+      (level: '高', rpm: 3300),
+    ],
+  ),
+  (
+    gear: '超频',
+    levels: [
+      (level: '低', rpm: 3500),
+      (level: '中', rpm: 3700),
+      (level: '高', rpm: 4000),
+    ],
+  ),
+];
+
+Map<String, dynamic>? _stringMap(Object? value) =>
+    value is Map ? Map<String, dynamic>.from(value) : null;
+
+Map<String, dynamic> normalizeManualGearRpmMap(Object? raw) {
+  final source = _stringMap(raw);
+  final result = <String, dynamic>{};
+  var previous = 0;
+  for (final preset in manualGearPresets) {
+    final sourceLevels = _stringMap(source?[preset.gear]);
+    final levels = <String, int>{};
+    for (final level in preset.levels) {
+      final value = sourceLevels?[level.level];
+      var rpm = value is num ? value.round() : level.rpm;
+      rpm = rpm.clamp(800, 4500);
+      if (rpm < previous) rpm = previous;
+      levels[level.level] = rpm;
+      previous = rpm;
+    }
+    result[preset.gear] = levels;
+  }
+  return result;
+}
+
+List<ManualGearPreset> effectiveManualGearPresets(
+  Object? raw, {
+  required bool bs1,
+}) {
+  if (bs1) {
+    return [
+      for (final preset in manualGearPresets)
+        (
+          gear: preset.gear,
+          levels: [(level: '中', rpm: preset.levels.first.rpm)],
+        ),
+    ];
+  }
+  final values = normalizeManualGearRpmMap(raw);
+  return [
+    for (final preset in manualGearPresets)
+      (
+        gear: preset.gear,
+        levels: [
+          for (final level in preset.levels)
+            (
+              level: level.level,
+              rpm: (_stringMap(values[preset.gear])?[level.level] as int),
+            ),
+        ],
+      ),
+  ];
+}
+
+Map<String, dynamic> readSpeedAvoidance(Object? raw) {
+  final source = _stringMap(raw) ?? const <String, dynamic>{};
+  int value(String key, int fallback, int min, int max) {
+    final rawValue = source[key];
+    return (rawValue is num ? rawValue.round() : fallback).clamp(min, max);
+  }
+
+  var minRpm = value('minRpm', 1900, 800, 4500);
+  var maxRpm = value('maxRpm', 2200, 800, 4500);
+  if (minRpm > maxRpm) (minRpm, maxRpm) = (maxRpm, minRpm);
+  if (minRpm == maxRpm) {
+    if (maxRpm < 4500) {
+      maxRpm += 50;
+    } else {
+      minRpm -= 50;
+    }
+  }
+  return {
+    ...source,
+    'enabled': source['enabled'] == true,
+    'minRpm': minRpm,
+    'maxRpm': maxRpm,
+    'marginRpm': value('marginRpm', 100, 50, 500),
+    'emergencyBypassTemp': value('emergencyBypassTemp', 80, 60, 95),
+  };
+}
+
+const _weekdaySequence = [1, 2, 3, 4, 5, 6, 0];
+
+List<int> normalizeScheduleWeekdays(Object? raw) {
+  if (raw is! List) return List<int>.from(_weekdaySequence);
+  final days = <int>{
+    for (final day in raw)
+      if (day is num && day == day.round() && day >= 0 && day <= 6) day.toInt(),
+  };
+  return days.isEmpty
+      ? List<int>.from(_weekdaySequence)
+      : [
+          for (final day in _weekdaySequence)
+            if (days.contains(day)) day,
+        ];
+}
+
+String normalizeScheduleClock(Object? raw, String fallback) {
+  final match = RegExp(r'^(\d{2}):(\d{2})$').firstMatch(raw?.toString() ?? '');
+  if (match == null) return fallback;
+  final hour = int.parse(match.group(1)!);
+  final minute = int.parse(match.group(2)!);
+  return hour <= 23 && minute <= 59
+      ? '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}'
+      : fallback;
+}
+
+Map<String, dynamic> readTimeCurveSchedule(
+  Object? raw,
+  List<FanCurveProfileOption> profiles,
+  String? activeProfileId,
+) {
+  final source = _stringMap(raw) ?? const <String, dynamic>{};
+  final fallbackProfile =
+      profiles.any((profile) => profile.id == activeProfileId)
+      ? activeProfileId!
+      : profiles.firstOrNull?.id ?? '';
+  final validProfileIds = {for (final profile in profiles) profile.id};
+  final rules = <Map<String, dynamic>>[];
+  final rawRules = source['rules'];
+  if (rawRules is List) {
+    for (var index = 0; index < rawRules.length; index++) {
+      final rule = _stringMap(rawRules[index]) ?? const <String, dynamic>{};
+      final id = rule['id']?.toString().trim() ?? '';
+      final name = rule['name']?.toString().trim() ?? '';
+      final profileId = rule['curveProfileId']?.toString() ?? '';
+      rules.add({
+        ...rule,
+        'id': id.isEmpty ? 'schedule-${index + 1}' : id,
+        'name': name.isEmpty ? '时段 ${index + 1}' : name,
+        'enabled': rule['enabled'] != false,
+        'weekdays': normalizeScheduleWeekdays(rule['weekdays']),
+        'startTime': normalizeScheduleClock(rule['startTime'], '22:00'),
+        'endTime': normalizeScheduleClock(rule['endTime'], '07:00'),
+        'curveProfileId': validProfileIds.contains(profileId)
+            ? profileId
+            : fallbackProfile,
+      });
+    }
+  }
+  return {...source, 'enabled': source['enabled'] == true, 'rules': rules};
+}
+
+bool scheduleRuleMatchesAt(Map<String, dynamic> rule, DateTime now) {
+  if (rule['enabled'] == false) return false;
+  int? minutes(Object? raw) {
+    final value = normalizeScheduleClock(raw, '');
+    if (value.isEmpty) return null;
+    final parts = value.split(':');
+    return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+  }
+
+  final start = minutes(rule['startTime']);
+  final end = minutes(rule['endTime']);
+  if (start == null || end == null) return false;
+  final days = normalizeScheduleWeekdays(rule['weekdays']);
+  final weekday = now.weekday % 7;
+  final previousWeekday = (weekday + 6) % 7;
+  final current = now.hour * 60 + now.minute;
+  if (start == end) return days.contains(weekday);
+  if (start < end) {
+    return days.contains(weekday) && current >= start && current < end;
+  }
+  return current >= start
+      ? days.contains(weekday)
+      : days.contains(previousWeekday) && current < end;
+}
+
 const _pageLabels = ['状态', '曲线', '控制', '关于'];
 const _fluentPageIcons = [
   fluent.FluentIcons.view_dashboard,
@@ -143,6 +417,7 @@ class ThrmShell extends StatefulWidget {
 
 class _ThrmShellState extends State<ThrmShell> {
   ThrmPage page = ThrmPage.status;
+  bool paneExpanded = false;
   final statusScrollController = SmoothScrollController();
   final curveScrollController = SmoothScrollController();
   final aboutScrollController = SmoothScrollController();
@@ -159,16 +434,28 @@ class _ThrmShellState extends State<ThrmShell> {
   Widget build(BuildContext context) {
     final selected = page.index;
     final view = fluent.NavigationView(
-      titleBar: const fluent.TitleBar(isBackButtonVisible: false),
       pane: fluent.NavigationPane(
+        key: const ValueKey('navigation-pane'),
+        toggleButton: Transform.translate(
+          offset: const Offset(0, 5),
+          child: fluent.PaneToggleButton(
+            key: const ValueKey('navigation-pane-toggle'),
+            onPressed: _togglePane,
+          ),
+        ),
+        toggleButtonPosition: fluent.PaneToggleButtonPreferredPosition.pane,
         selected: selected,
         onChanged: _selectPage,
         displayMode: fluent.PaneDisplayMode.expanded,
-        size: const fluent.NavigationPaneSize(openWidth: 180),
+        toggleable: false,
+        size: fluent.NavigationPaneSize(openWidth: paneExpanded ? 180 : 50),
         items: [
           for (var index = 0; index < ThrmPage.values.length; index++)
             fluent.PaneItem(
-              icon: Icon(_fluentPageIcons[index]),
+              icon: Icon(
+                _fluentPageIcons[index],
+                key: ValueKey('navigation-item-$index'),
+              ),
               title: Text(_pageLabels[index]),
               body: _page(ThrmPage.values[index]),
             ),
@@ -177,6 +464,8 @@ class _ThrmShellState extends State<ThrmShell> {
     );
     return Scaffold(backgroundColor: Colors.transparent, body: view);
   }
+
+  void _togglePane() => setState(() => paneExpanded = !paneExpanded);
 
   void _selectPage(int index) => setState(() => page = ThrmPage.values[index]);
 
@@ -285,7 +574,7 @@ class StatusPage extends StatelessWidget {
                   value: _metric(temp, 'cpuPower', 'W'),
                 ),
                 MetricCard(
-                  icon: fluent.FluentIcons.power_button,
+                  icon: fluent.FluentIcons.lightning_bolt,
                   label: 'GPU 功耗',
                   value: _metric(temp, 'gpuPower', 'W'),
                 ),
@@ -421,6 +710,9 @@ class _FanCurvePageState extends State<FanCurvePage> {
   bool dirty = false;
   int? dragIndex;
   double dragRpm = 0;
+  double? targetTempDraft;
+  bool avoidanceRevealed = false;
+  (_ProfileMenuAction, FanCurveProfileOption?)? pendingProfileAction;
 
   void _syncExternalCurve(List<FanCurvePoint> external) {
     if (listEquals(savedCurve, external)) return;
@@ -474,11 +766,24 @@ class _FanCurvePageState extends State<FanCurvePage> {
         dirty = !listEquals(draftCurve, savedCurve);
       });
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.controller.error ?? 'Core 当前不可用，曲线未保存')),
-      );
+      _showError(widget.controller.error ?? 'Core 当前不可用，曲线未保存');
     }
     return saved;
+  }
+
+  void _showError(String message) {
+    fluent.displayInfoBar(
+      context,
+      alignment: Alignment.topCenter,
+      builder: (_, close) => fluent.InfoBar.error(
+        title: const Text('操作失败'),
+        content: Text(message),
+        action: fluent.IconButton(
+          icon: const Icon(fluent.WindowsIcons.chrome_close),
+          onPressed: close,
+        ),
+      ),
+    );
   }
 
   List<Map<String, int>> _curveJson(List<FanCurvePoint> curve) => [
@@ -486,27 +791,46 @@ class _FanCurvePageState extends State<FanCurvePage> {
       {'temperature': point.temperature, 'rpm': point.rpm},
   ];
 
-  Future<bool> _confirmLowRpm(List<FanCurvePoint> curve) async {
-    if (!curve.any((point) => point.rpm < 1000)) return true;
-    final confirmed = await showDialog<bool>(
+  Future<bool> _confirmAction({
+    required IconData icon,
+    required String title,
+    required String message,
+    required String confirmLabel,
+  }) async {
+    final confirmed = await fluent.showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        icon: const Icon(Icons.warning_amber_rounded),
-        title: const Text('低转速风险'),
-        content: const Text('曲线中存在低于 1000 RPM 的控制点，风扇可能停转并导致设备过热。确定仍要保存吗？'),
+      builder: (dialogContext) => fluent.ContentDialog(
+        title: Row(
+          children: [
+            Icon(icon, size: 20),
+            const SizedBox(width: 10),
+            Expanded(child: Text(title)),
+          ],
+        ),
+        content: Text(message),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
+          fluent.Button(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(confirmLabel),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('仍然保存'),
+          fluent.FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
           ),
         ],
       ),
     );
     return mounted && confirmed == true;
+  }
+
+  Future<bool> _confirmLowRpm(List<FanCurvePoint> curve) async {
+    if (!curve.any((point) => point.rpm < 1000)) return true;
+    return _confirmAction(
+      icon: fluent.FluentIcons.warning,
+      title: '低转速风险',
+      message: '曲线中存在低于 1000 RPM 的控制点，风扇可能停转并导致设备过热。确定仍要保存吗？',
+      confirmLabel: '仍然保存',
+    );
   }
 
   Future<String?> _promptProfileName({
@@ -521,9 +845,10 @@ class _FanCurvePageState extends State<FanCurvePage> {
       return trimmed.isEmpty ? fallback : trimmed;
     }
 
-    return showDialog<String>(
+    final controller = TextEditingController(text: initialValue);
+    final result = await fluent.showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => fluent.ContentDialog(
         title: Text(title),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -531,30 +856,32 @@ class _FanCurvePageState extends State<FanCurvePage> {
           children: [
             Text(description),
             const SizedBox(height: 16),
-            TextFormField(
+            fluent.TextBox(
               key: const ValueKey('fan-curve-profile-name-input'),
-              initialValue: initialValue,
+              controller: controller,
               autofocus: true,
               maxLength: 6,
               textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(labelText: '方案名称'),
+              placeholder: '方案名称',
               onChanged: (text) => input = text,
-              onFieldSubmitted: (_) => Navigator.pop(dialogContext, value()),
+              onSubmitted: (_) => Navigator.pop(dialogContext, value()),
             ),
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
+          fluent.Button(
             onPressed: () => Navigator.pop(dialogContext, value()),
             child: const Text('确定'),
+          ),
+          fluent.FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
           ),
         ],
       ),
     );
+    controller.dispose();
+    return result;
   }
 
   Future<void> _createProfile() async {
@@ -574,9 +901,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
     );
     if (!mounted) return;
     if (!saved) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.controller.error ?? '新建曲线方案失败')),
-      );
+      _showError(widget.controller.error ?? '新建曲线方案失败');
       return;
     }
     final activeCurve = readFanCurve(widget.controller.config?['fanCurve']);
@@ -585,9 +910,6 @@ class _FanCurvePageState extends State<FanCurvePage> {
       draftCurve = savedCurve;
       dirty = false;
     });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('已新建曲线方案“$name”')));
   }
 
   Future<void> _renameProfile(FanCurveProfileOption profile) async {
@@ -605,45 +927,23 @@ class _FanCurvePageState extends State<FanCurvePage> {
       setActive: false,
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          saved ? '曲线方案已重命名' : widget.controller.error ?? '重命名曲线方案失败',
-        ),
-      ),
-    );
+    if (!saved) _showError(widget.controller.error ?? '重命名曲线方案失败');
   }
 
   Future<void> _deleteProfile(FanCurveProfileOption profile) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        icon: const Icon(Icons.delete_outline),
-        title: const Text('删除曲线方案？'),
-        content: Text(
-          dirty
-              ? '“${profile.name}”还有未保存修改；删除后这些修改也会丢失。'
-              : '确定删除“${profile.name}”吗？此操作无法撤销。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirmAction(
+      icon: fluent.FluentIcons.delete,
+      title: '删除曲线方案？',
+      message: dirty
+          ? '“${profile.name}”还有未保存修改；删除后这些修改也会丢失。'
+          : '确定删除“${profile.name}”吗？此操作无法撤销。',
+      confirmLabel: '删除',
     );
-    if (!mounted || confirmed != true) return;
+    if (!confirmed) return;
     final deleted = await widget.controller.deleteFanCurveProfile(profile.id);
     if (!mounted) return;
     if (!deleted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.controller.error ?? '删除曲线方案失败')),
-      );
+      _showError(widget.controller.error ?? '删除曲线方案失败');
       return;
     }
     final activeCurve = readFanCurve(widget.controller.config?['fanCurve']);
@@ -652,9 +952,6 @@ class _FanCurvePageState extends State<FanCurvePage> {
       draftCurve = activeCurve;
       dirty = false;
     });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('曲线方案已删除')));
   }
 
   Future<void> _exportProfiles() async {
@@ -662,22 +959,14 @@ class _FanCurvePageState extends State<FanCurvePage> {
     final code = await widget.controller.exportFanCurveProfiles();
     if (!mounted) return;
     if (code == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.controller.error ?? '导出曲线方案失败')),
-      );
+      _showError(widget.controller.error ?? '导出曲线方案失败');
       return;
     }
     try {
       await Clipboard.setData(ClipboardData(text: code));
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('方案码已复制到剪贴板')));
     } catch (caught) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('复制方案码失败：$caught')));
+      _showError('复制方案码失败：$caught');
     }
   }
 
@@ -688,25 +977,19 @@ class _FanCurvePageState extends State<FanCurvePage> {
           (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim() ?? '';
     } catch (caught) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('读取剪贴板失败：$caught')));
+      _showError('读取剪贴板失败：$caught');
       return;
     }
     if (!mounted) return;
     if (code.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('剪贴板中没有方案码')));
+      _showError('剪贴板中没有方案码');
       return;
     }
     if (dirty && !await _save()) return;
     final imported = await widget.controller.importFanCurveProfiles(code);
     if (!mounted) return;
     if (!imported) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.controller.error ?? '导入曲线方案失败')),
-      );
+      _showError(widget.controller.error ?? '导入曲线方案失败');
       return;
     }
     final activeCurve = readFanCurve(widget.controller.config?['fanCurve']);
@@ -715,46 +998,161 @@ class _FanCurvePageState extends State<FanCurvePage> {
       draftCurve = activeCurve;
       dirty = false;
     });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('已导入为新曲线方案')));
+  }
+
+  Future<bool> _saveConfig(Map<String, dynamic> patch, String action) async {
+    final saved = await widget.controller.updateConfig(patch, action: action);
+    if (!mounted) return false;
+    if (!saved) _showError(widget.controller.error ?? '$action失败');
+    return saved;
+  }
+
+  Future<void> _setAutoControl(bool enabled) async {
+    await widget.controller.setAutoControl(enabled);
+    if (!mounted) return;
+    if (widget.controller.error != null) _showError(widget.controller.error!);
+  }
+
+  Future<void> _updateSmartControl(
+    Map<String, dynamic> current,
+    Map<String, dynamic> patch,
+  ) async {
+    await _saveConfig({
+      'smartControl': {...current, ...patch},
+    }, '保存学习设置');
+  }
+
+  Future<void> _resetLearnedOffsets() async {
+    final reset = await widget.controller.resetLearnedOffsets();
+    if (!mounted) return;
+    if (!reset) _showError(widget.controller.error ?? '重置学习偏移失败');
+  }
+
+  Future<void> _setManualGear(String gear, String level) async {
+    final changed = await widget.controller.setManualGear(gear, level);
+    if (!mounted) return;
+    if (!changed) _showError(widget.controller.error ?? '切换手动挡位失败');
+  }
+
+  Future<void> _editManualGearRpm(
+    Object? current,
+    String gear,
+    String level,
+  ) async {
+    final values = await fluent.showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => _ManualGearRpmDialog(initial: current),
+    );
+    if (!mounted || values == null) return;
+    if (!await _saveConfig({'manualGearRpm': values}, '保存挡位转速')) return;
+    await _setManualGear(gear, level);
+  }
+
+  Future<void> _revealAvoidance() async {
+    final confirmed = await _confirmAction(
+      icon: fluent.FluentIcons.warning,
+      title: '展开避噪转速设置？',
+      message: '这些参数需要根据设备实测噪音调整；设置不当可能影响正常散热。',
+      confirmLabel: '我已了解',
+    );
+    if (confirmed) setState(() => avoidanceRevealed = true);
+  }
+
+  Future<void> _updateSpeedAvoidance(
+    Map<String, dynamic> current,
+    Map<String, dynamic> patch,
+  ) async {
+    await _saveConfig({
+      'speedAvoidance': readSpeedAvoidance({...current, ...patch}),
+    }, '保存避噪转速设置');
+  }
+
+  Future<void> _updateSchedule(
+    Map<String, dynamic> current,
+    List<FanCurveProfileOption> profiles,
+    String? activeProfileId,
+    Map<String, dynamic> patch,
+  ) async {
+    final next = readTimeCurveSchedule(
+      {...current, ...patch},
+      profiles,
+      activeProfileId,
+    );
+    await _saveConfig({'timeCurveSchedule': next}, '保存分时曲线');
+  }
+
+  Future<void> _addScheduleRule(
+    Map<String, dynamic> schedule,
+    List<FanCurveProfileOption> profiles,
+    String? activeProfileId,
+  ) async {
+    if (profiles.isEmpty) return;
+    final rules = [
+      for (final raw in schedule['rules'] as List)
+        Map<String, dynamic>.from(raw as Map),
+    ];
+    rules.add({
+      'id':
+          'schedule-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}',
+      'name': '新时段',
+      'enabled': true,
+      'weekdays': List<int>.from(_weekdaySequence),
+      'startTime': '22:00',
+      'endTime': '07:00',
+      'curveProfileId': activeProfileId ?? profiles.first.id,
+    });
+    await _updateSchedule(schedule, profiles, activeProfileId, {
+      'rules': rules,
+    });
+  }
+
+  Future<void> _updateScheduleRule(
+    Map<String, dynamic> schedule,
+    List<FanCurveProfileOption> profiles,
+    String? activeProfileId,
+    String id,
+    Map<String, dynamic> patch,
+  ) async {
+    final rules = [
+      for (final raw in schedule['rules'] as List)
+        if ((raw as Map)['id'] == id)
+          {...Map<String, dynamic>.from(raw), ...patch}
+        else
+          Map<String, dynamic>.from(raw),
+    ];
+    await _updateSchedule(schedule, profiles, activeProfileId, {
+      'rules': rules,
+    });
+  }
+
+  Future<void> _deleteScheduleRule(
+    Map<String, dynamic> schedule,
+    List<FanCurveProfileOption> profiles,
+    String? activeProfileId,
+    String id,
+  ) async {
+    final rules = [
+      for (final raw in schedule['rules'] as List)
+        if ((raw as Map)['id'] != id) Map<String, dynamic>.from(raw),
+    ];
+    await _updateSchedule(schedule, profiles, activeProfileId, {
+      'rules': rules,
+    });
   }
 
   Future<void> _setTemperatureHistoryEnabled(bool enabled) async {
-    if (!enabled) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          icon: const Icon(Icons.delete_sweep_outlined),
-          title: const Text('关闭后台温度记录？'),
-          content: const Text('Core 会立即清空已保存的温度历史；重新开启后只会记录新的采样。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('关闭并清空'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted || confirmed != true) return;
+    if (!enabled &&
+        !await _confirmAction(
+          icon: fluent.FluentIcons.delete_rows,
+          title: '关闭后台温度记录？',
+          message: 'Core 会立即清空已保存的温度历史；重新开启后只会记录新的采样。',
+          confirmLabel: '关闭并清空',
+        )) {
+      return;
     }
     final saved = await widget.controller.setTemperatureHistoryEnabled(enabled);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          saved
-              ? enabled
-                    ? '后台温度记录已开启'
-                    : '后台温度记录已关闭，历史已清空'
-              : widget.controller.error ?? '设置温度历史记录失败',
-        ),
-      ),
-    );
+    if (!saved) _showError(widget.controller.error ?? '设置温度历史记录失败');
   }
 
   Future<void> _setTemperatureHistoryRetentionHours(int hours) async {
@@ -762,15 +1160,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
       hours,
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          saved
-              ? '温度历史保留时长已设为 $hours 小时'
-              : widget.controller.error ?? '设置温度历史保留时长失败',
-        ),
-      ),
-    );
+    if (!saved) _showError(widget.controller.error ?? '设置温度历史保留时长失败');
   }
 
   Future<void> _handleProfileAction(
@@ -802,23 +1192,24 @@ class _FanCurvePageState extends State<FanCurvePage> {
     }
 
     if (dirty) {
-      final action = await showDialog<_PendingCurveAction>(
+      final action = await fluent.showDialog<_PendingCurveAction>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (dialogContext) => fluent.ContentDialog(
           title: const Text('曲线尚未保存'),
           content: const Text('切换方案前，要保存当前曲线的修改吗？'),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
+            fluent.Button(
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('取消'),
             ),
-            OutlinedButton(
+            fluent.Button(
               onPressed: () =>
-                  Navigator.pop(context, _PendingCurveAction.discard),
+                  Navigator.pop(dialogContext, _PendingCurveAction.discard),
               child: const Text('放弃并切换'),
             ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, _PendingCurveAction.save),
+            fluent.FilledButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, _PendingCurveAction.save),
               child: const Text('保存并切换'),
             ),
           ],
@@ -834,9 +1225,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
 
     final switched = await widget.controller.setActiveFanCurveProfile(id);
     if (!mounted || switched) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(widget.controller.error ?? '曲线方案切换失败')),
-    );
+    _showError(widget.controller.error ?? '曲线方案切换失败');
   }
 
   @override
@@ -844,15 +1233,11 @@ class _FanCurvePageState extends State<FanCurvePage> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
-        _syncExternalCurve(readFanCurve(widget.controller.config?['fanCurve']));
+        final config = widget.controller.config ?? const <String, dynamic>{};
+        _syncExternalCurve(readFanCurve(config['fanCurve']));
         final points = draftCurve;
-        final profiles = readFanCurveProfileOptions(
-          widget.controller.config?['fanCurveProfiles'],
-        );
-        final activeProfileId = widget
-            .controller
-            .config?['activeFanCurveProfileId']
-            ?.toString();
+        final profiles = readFanCurveProfileOptions(config['fanCurveProfiles']);
+        final activeProfileId = config['activeFanCurveProfileId']?.toString();
         final selectedProfileIndex = profiles.indexWhere(
           (profile) => profile.id == activeProfileId,
         );
@@ -862,20 +1247,74 @@ class _FanCurvePageState extends State<FanCurvePage> {
         final selectedProfileId = selectedProfile?.id;
         final busy =
             widget.controller.updatingFanCurve ||
-            widget.controller.updatingFanCurveProfile;
+            widget.controller.updatingFanCurveProfile ||
+            widget.controller.updatingFanFeatures ||
+            widget.controller.updatingManualGear;
+        final controlsEnabled =
+            widget.controller.connection == CoreConnection.connected &&
+            widget.controller.config != null;
+        final autoControl = config['autoControl'] == true;
         final temperature = widget.controller.temperature?['controlTemp'] is num
             ? (widget.controller.temperature!['controlTemp'] as num).toDouble()
             : widget.controller.temperature?['maxTemp'] is num
             ? (widget.controller.temperature!['maxTemp'] as num).toDouble()
             : 0.0;
         final targetRpm = widget.controller.fanData?['targetRpm'];
-        final colors = Theme.of(context).colorScheme;
-        return ListView(
-          controller: widget.scrollController,
-          padding: const EdgeInsets.all(20),
+        final smartControl = <String, dynamic>{
+          'learning': true,
+          'predictiveBoost': true,
+          'learningBias': 'balanced',
+          'filterTransientSpike': true,
+          'laptopFanGuard': true,
+          'targetTemp': 68,
+          ...?_stringMap(config['smartControl']),
+        };
+        if (!const {
+          'balanced',
+          'cooling',
+          'quiet',
+        }.contains(smartControl['learningBias'])) {
+          smartControl['learningBias'] = 'balanced';
+        }
+        final configuredTargetTemp = smartControl['targetTemp'];
+        smartControl['targetTemp'] =
+            (configuredTargetTemp is num ? configuredTargetTemp.round() : 68)
+                .clamp(45, 90);
+        final learnedPoints = autoControl && smartControl['learning'] == true
+            ? _learnedFanCurve(
+                points,
+                smartControl['learnedOffsets'],
+                smartControl['learningBias'],
+              )
+            : const <FanCurvePoint>[];
+        final speedAvoidance = readSpeedAvoidance(config['speedAvoidance']);
+        if (speedAvoidance['enabled'] == true) avoidanceRevealed = true;
+        final schedule = readTimeCurveSchedule(
+          config['timeCurveSchedule'],
+          profiles,
+          activeProfileId,
+        );
+        final scheduleRules = (schedule['rules'] as List)
+            .cast<Map<String, dynamic>>();
+        final currentScheduleRule = schedule['enabled'] == true
+            ? scheduleRules.cast<Map<String, dynamic>?>().firstWhere(
+                (rule) => scheduleRuleMatchesAt(rule!, DateTime.now()),
+                orElse: () => null,
+              )
+            : null;
+        final deviceModel = widget.controller.deviceStatus?['model']
+            ?.toString();
+        final manualPresets = effectiveManualGearPresets(
+          config['manualGearRpm'],
+          bs1: deviceModel == 'BS1',
+        );
+        final manualGear = config['manualGear']?.toString() ?? '标准';
+        final manualLevel = config['manualLevel']?.toString() ?? '中';
+        final theme = fluent.FluentTheme.of(context);
+        return fluent.ScaffoldPage.scrollable(
+          scrollController: widget.scrollController,
+          header: const fluent.PageHeader(title: Text('风扇曲线')),
           children: [
-            Text('风扇曲线', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 4),
             Wrap(
               alignment: WrapAlignment.spaceBetween,
               crossAxisAlignment: WrapCrossAlignment.center,
@@ -897,109 +1336,135 @@ class _FanCurvePageState extends State<FanCurvePage> {
                       if (profiles.isNotEmpty)
                         Semantics(
                           label: '当前风扇曲线方案',
-                          child: DropdownButton<String>(
-                            key: const ValueKey('fan-curve-profile-selector'),
-                            value: selectedProfileId,
-                            items: [
-                              for (final profile in profiles)
-                                DropdownMenuItem(
-                                  value: profile.id,
-                                  child: Text(profile.name),
-                                ),
-                            ],
-                            onChanged:
-                                widget.controller.connection ==
-                                        CoreConnection.connected &&
-                                    profiles.length > 1 &&
-                                    !busy
-                                ? _switchProfile
-                                : null,
+                          child: SizedBox(
+                            width: 128,
+                            height: 34,
+                            child: fluent.ComboBox<String>(
+                              key: const ValueKey('fan-curve-profile-selector'),
+                              value: selectedProfileId,
+                              isExpanded: true,
+                              items: [
+                                for (final profile in profiles)
+                                  fluent.ComboBoxItem(
+                                    value: profile.id,
+                                    child: Text(profile.name),
+                                  ),
+                              ],
+                              onChanged:
+                                  widget.controller.connection ==
+                                          CoreConnection.connected &&
+                                      profiles.length > 1 &&
+                                      !busy
+                                  ? _switchProfile
+                                  : null,
+                            ),
                           ),
                         ),
-                      PopupMenuButton<_ProfileMenuAction>(
-                        key: const ValueKey('fan-curve-profile-menu'),
-                        enabled:
-                            widget.controller.connection ==
-                                CoreConnection.connected &&
-                            !busy,
-                        tooltip: '管理曲线方案',
-                        icon: const Icon(Icons.more_horiz),
-                        onSelected: (action) =>
-                            _handleProfileAction(action, selectedProfile),
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: _ProfileMenuAction.create,
-                            child: Row(
-                              children: [
-                                Icon(Icons.add),
-                                SizedBox(width: 12),
-                                Text('新建方案'),
-                              ],
+                      SizedBox(
+                        height: 34,
+                        child: fluent.DropDownButton(
+                          key: const ValueKey('fan-curve-profile-menu'),
+                          disabled:
+                              widget.controller.connection !=
+                                  CoreConnection.connected ||
+                              busy,
+                          leading: const Icon(fluent.FluentIcons.more),
+                          title: const Text('管理'),
+                          onClose: () async {
+                            final pending = pendingProfileAction;
+                            pendingProfileAction = null;
+                            if (pending != null) {
+                              await _handleProfileAction(
+                                pending.$1,
+                                pending.$2,
+                              );
+                            }
+                          },
+                          items: [
+                            fluent.MenuFlyoutItem(
+                              leading: const Icon(fluent.FluentIcons.add),
+                              text: const Text('新建方案'),
+                              onPressed: () => pendingProfileAction = (
+                                _ProfileMenuAction.create,
+                                selectedProfile,
+                              ),
                             ),
-                          ),
-                          PopupMenuItem(
-                            value: _ProfileMenuAction.rename,
-                            enabled: selectedProfile != null,
-                            child: const Row(
-                              children: [
-                                Icon(Icons.edit_outlined),
-                                SizedBox(width: 12),
-                                Text('重命名'),
-                              ],
+                            fluent.MenuFlyoutItem(
+                              leading: const Icon(fluent.FluentIcons.edit),
+                              text: const Text('重命名'),
+                              onPressed: selectedProfile == null
+                                  ? null
+                                  : () => pendingProfileAction = (
+                                      _ProfileMenuAction.rename,
+                                      selectedProfile,
+                                    ),
                             ),
-                          ),
-                          PopupMenuItem(
-                            value: _ProfileMenuAction.delete,
-                            enabled:
-                                selectedProfile != null && profiles.length > 1,
-                            child: const Row(
-                              children: [
-                                Icon(Icons.delete_outline),
-                                SizedBox(width: 12),
-                                Text('删除方案'),
-                              ],
+                            fluent.MenuFlyoutItem(
+                              leading: const Icon(fluent.FluentIcons.delete),
+                              text: const Text('删除方案'),
+                              onPressed:
+                                  selectedProfile != null && profiles.length > 1
+                                  ? () => pendingProfileAction = (
+                                      _ProfileMenuAction.delete,
+                                      selectedProfile,
+                                    )
+                                  : null,
                             ),
-                          ),
-                          const PopupMenuDivider(),
-                          const PopupMenuItem(
-                            value: _ProfileMenuAction.export,
-                            child: Row(
-                              children: [
-                                Icon(Icons.content_copy_outlined),
-                                SizedBox(width: 12),
-                                Text('导出并复制方案码'),
-                              ],
+                            const fluent.MenuFlyoutSeparator(),
+                            fluent.MenuFlyoutItem(
+                              leading: const Icon(fluent.FluentIcons.copy),
+                              text: const Text('导出并复制方案码'),
+                              onPressed: () => pendingProfileAction = (
+                                _ProfileMenuAction.export,
+                                selectedProfile,
+                              ),
                             ),
-                          ),
-                          const PopupMenuItem(
-                            value: _ProfileMenuAction.import,
-                            child: Row(
-                              children: [
-                                Icon(Icons.content_paste_go_outlined),
-                                SizedBox(width: 12),
-                                Text('从剪贴板导入方案码'),
-                              ],
+                            fluent.MenuFlyoutItem(
+                              leading: const Icon(fluent.FluentIcons.paste),
+                              text: const Text('从剪贴板导入方案码'),
+                              onPressed: () => pendingProfileAction = (
+                                _ProfileMenuAction.import,
+                                selectedProfile,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                      OutlinedButton.icon(
-                        key: const ValueKey('fan-curve-discard'),
-                        onPressed: dirty && !busy ? _discard : null,
-                        icon: const Icon(Icons.undo),
-                        label: const Text('放弃修改'),
+                      SizedBox(
+                        height: 34,
+                        child: fluent.Button(
+                          key: const ValueKey('fan-curve-discard'),
+                          onPressed: dirty && !busy ? _discard : null,
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(fluent.FluentIcons.undo, size: 16),
+                              SizedBox(width: 8),
+                              Text('放弃修改'),
+                            ],
+                          ),
+                        ),
                       ),
-                      FilledButton.icon(
-                        key: const ValueKey('fan-curve-save'),
-                        onPressed:
-                            dirty &&
-                                widget.controller.connection ==
-                                    CoreConnection.connected &&
-                                !busy
-                            ? _save
-                            : null,
-                        icon: const Icon(Icons.save_outlined),
-                        label: Text(busy ? '处理中…' : '保存'),
+                      SizedBox(
+                        height: 34,
+                        child: fluent.FilledButton(
+                          key: const ValueKey('fan-curve-save'),
+                          onPressed:
+                              dirty &&
+                                  widget.controller.connection ==
+                                      CoreConnection.connected &&
+                                  !busy
+                              ? _save
+                              : null,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(fluent.FluentIcons.save, size: 16),
+                              const SizedBox(width: 8),
+                              Text(busy ? '处理中…' : '保存'),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -1007,64 +1472,175 @@ class _FanCurvePageState extends State<FanCurvePage> {
             ),
             const SizedBox(height: 16),
             if (points.isEmpty)
-              const Card(
-                child: ListTile(
-                  leading: Icon(Icons.show_chart),
-                  title: Text('暂无可用曲线'),
-                  subtitle: Text('曲线至少需要两个温度递增、转速非递减的控制点。'),
-                ),
+              const fluent.InfoBar(
+                title: Text('暂无可用曲线'),
+                content: Text('曲线至少需要两个温度递增、转速非递减的控制点。'),
               )
             else
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          if (temperature > 0)
-                            Chip(
-                              avatar: const Icon(Icons.thermostat, size: 18),
-                              label: Text(
-                                '控温 ${temperature.toStringAsFixed(0)}°C',
+              fluent.Card(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 8,
+                      children: [
+                        if (temperature > 0)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                fluent.FluentIcons.snowflake,
+                                size: 16,
                               ),
-                            ),
-                          if (targetRpm is num)
-                            Chip(
-                              avatar: const Icon(Icons.air, size: 18),
-                              label: Text('目标 ${targetRpm.toInt()} RPM'),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Semantics(
-                        label: '风扇曲线，${points.length} 个可上下拖动的控制点',
-                        child: RepaintBoundary(
-                          child: SizedBox(
-                            height: 320,
-                            width: double.infinity,
-                            child: _FanCurveChart(
-                              points: points,
-                              currentTemperature: temperature,
-                              curveColor: colors.primary,
-                              markerColor: colors.tertiary,
-                              gridColor: colors.outlineVariant,
-                              labelColor: colors.onSurfaceVariant,
-                              editable: !busy,
-                              onDragStart: _startDrag,
-                              onDragUpdate: _dragBy,
-                              onDragEnd: _endDrag,
-                            ),
+                              const SizedBox(width: 6),
+                              Text('控温 ${temperature.toStringAsFixed(0)}°C'),
+                            ],
                           ),
+                        if (targetRpm is num)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                fluent.FluentIcons.speed_high,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 6),
+                              Text('目标 ${targetRpm.toInt()} RPM'),
+                            ],
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Semantics(
+                      label: '风扇曲线，${points.length} 个可上下拖动的控制点',
+                      child: SizedBox(
+                        height: 320,
+                        width: double.infinity,
+                        child: _FanCurveChart(
+                          key: const ValueKey('fan-curve-chart'),
+                          points: points,
+                          learnedPoints: learnedPoints,
+                          currentTemperature: temperature,
+                          curveColor: theme.accentColor.defaultBrushFor(
+                            theme.brightness,
+                          ),
+                          learnedColor: fluent.Colors.purple.defaultBrushFor(
+                            theme.brightness,
+                          ),
+                          markerColor: theme.resources.systemFillColorCaution,
+                          gridColor: theme.resources.dividerStrokeColorDefault,
+                          labelColor: theme.resources.textFillColorSecondary,
+                          editable: !busy,
+                          onDragStart: _startDrag,
+                          onDragUpdate: _dragBy,
+                          onDragEnd: _endDrag,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
+            const SizedBox(height: 16),
+            _AutoControlCard(
+              enabled: autoControl,
+              busy: widget.controller.updatingAutoControl,
+              controlsEnabled:
+                  controlsEnabled && widget.controller.deviceConnected,
+              onChanged: _setAutoControl,
+            ),
+            if (!autoControl &&
+                controlsEnabled &&
+                widget.controller.deviceConnected) ...[
+              const SizedBox(height: 16),
+              _ManualGearCard(
+                presets: manualPresets,
+                selectedGear: manualGear,
+                selectedLevel: manualLevel,
+                busy: busy,
+                onGearChanged: (gear) {
+                  final remembered = _stringMap(
+                    config['manualGearLevels'],
+                  )?[gear]?.toString();
+                  final nextLevel = deviceModel == 'BS1'
+                      ? '中'
+                      : const {'低', '中', '高'}.contains(remembered)
+                      ? remembered!
+                      : manualLevel;
+                  _setManualGear(gear, nextLevel);
+                },
+                onLevelChanged: (level) => _setManualGear(manualGear, level),
+                onCustomize: deviceModel == 'BS1'
+                    ? null
+                    : () => _editManualGearRpm(
+                        config['manualGearRpm'],
+                        manualGear,
+                        manualLevel,
+                      ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            _LearningCard(
+              config: smartControl,
+              points: points,
+              hasLaptopFan:
+                  (widget.controller.temperature?['cpuFanRpm'] as num? ?? 0) >
+                      0 ||
+                  (widget.controller.temperature?['gpuFanRpm'] as num? ?? 0) >
+                      0,
+              busy: widget.controller.updatingFanFeatures,
+              controlsEnabled: controlsEnabled,
+              targetTemp:
+                  targetTempDraft ??
+                  (smartControl['targetTemp'] as int).toDouble(),
+              onUpdate: (patch) => _updateSmartControl(smartControl, patch),
+              onTargetChanged: (value) =>
+                  setState(() => targetTempDraft = value),
+              onTargetCommitted: (value) async {
+                await _updateSmartControl(smartControl, {
+                  'targetTemp': value.round().clamp(45, 90),
+                });
+                if (mounted) setState(() => targetTempDraft = null);
+              },
+              onReset: _resetLearnedOffsets,
+            ),
+            const SizedBox(height: 16),
+            _SpeedAvoidanceCard(
+              config: speedAvoidance,
+              revealed: avoidanceRevealed,
+              busy: widget.controller.updatingFanFeatures,
+              controlsEnabled: controlsEnabled,
+              autoControl: autoControl,
+              targetRpm: targetRpm is num ? targetRpm.toInt() : null,
+              onReveal: _revealAvoidance,
+              onUpdate: (patch) => _updateSpeedAvoidance(speedAvoidance, patch),
+            ),
+            const SizedBox(height: 16),
+            _ScheduleCard(
+              config: schedule,
+              profiles: profiles,
+              currentRule: currentScheduleRule,
+              busy: widget.controller.updatingFanFeatures,
+              controlsEnabled: controlsEnabled,
+              onEnabledChanged: (enabled) => _updateSchedule(
+                schedule,
+                profiles,
+                activeProfileId,
+                {'enabled': enabled},
+              ),
+              onAdd: () =>
+                  _addScheduleRule(schedule, profiles, activeProfileId),
+              onRuleChanged: (id, patch) => _updateScheduleRule(
+                schedule,
+                profiles,
+                activeProfileId,
+                id,
+                patch,
+              ),
+              onRuleDeleted: (id) =>
+                  _deleteScheduleRule(schedule, profiles, activeProfileId, id),
+            ),
             const SizedBox(height: 16),
             _TemperatureHistoryCard(
               snapshot: widget.controller.temperatureHistory,
@@ -1077,6 +1653,1074 @@ class _FanCurvePageState extends State<FanCurvePage> {
           ],
         );
       },
+    );
+  }
+}
+
+class _CurveFeatureCard extends StatelessWidget {
+  const _CurveFeatureCard({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.trailing,
+    this.child,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final Widget trailing;
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = fluent.FluentTheme.of(context);
+    final accent = theme.accentColor.defaultBrushFor(theme.brightness);
+    return fluent.Card(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: accent.withAlpha(24),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Icon(icon, size: 18, color: accent),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: theme.typography.bodyStrong),
+                      const SizedBox(height: 2),
+                      Text(description, style: theme.typography.caption),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                trailing,
+              ],
+            ),
+          ),
+          if (child != null) ...[
+            const fluent.Divider(),
+            Padding(padding: const EdgeInsets.all(16), child: child),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AutoControlCard extends StatelessWidget {
+  const _AutoControlCard({
+    required this.enabled,
+    required this.busy,
+    required this.controlsEnabled,
+    required this.onChanged,
+  });
+
+  final bool enabled;
+  final bool busy;
+  final bool controlsEnabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => _CurveFeatureCard(
+    icon: fluent.FluentIcons.snowflake,
+    title: '智能控温',
+    description: busy
+        ? '正在切换控制模式…'
+        : enabled
+        ? 'Core 正按当前风扇曲线自动调整转速。'
+        : '当前使用手动挡位；曲线设置仍会保留。',
+    trailing: fluent.ToggleSwitch(
+      key: const ValueKey('fan-curve-auto-control'),
+      checked: enabled,
+      semanticLabel: '智能控温',
+      onChanged: controlsEnabled && !busy ? onChanged : null,
+    ),
+  );
+}
+
+class _ManualGearCard extends StatelessWidget {
+  const _ManualGearCard({
+    required this.presets,
+    required this.selectedGear,
+    required this.selectedLevel,
+    required this.busy,
+    required this.onGearChanged,
+    required this.onLevelChanged,
+    required this.onCustomize,
+  });
+
+  final List<ManualGearPreset> presets;
+  final String selectedGear;
+  final String selectedLevel;
+  final bool busy;
+  final ValueChanged<String> onGearChanged;
+  final ValueChanged<String> onLevelChanged;
+  final VoidCallback? onCustomize;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = presets.firstWhere(
+      (preset) => preset.gear == selectedGear,
+      orElse: () => presets[1],
+    );
+    final level = selected.levels.firstWhere(
+      (item) => item.level == selectedLevel,
+      orElse: () => selected.levels.first,
+    );
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.speed_high,
+      title: '手动挡位',
+      description: '${selected.gear} · ${level.level} · ${level.rpm} RPM',
+      trailing: onCustomize == null
+          ? const SizedBox.shrink()
+          : fluent.Button(
+              onPressed: busy ? null : onCustomize,
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(fluent.FluentIcons.edit, size: 16),
+                  SizedBox(width: 8),
+                  Text('自定义转速'),
+                ],
+              ),
+            ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final preset in presets)
+                SizedBox(
+                  width: 132,
+                  child: fluent.ToggleButton(
+                    checked: preset.gear == selected.gear,
+                    semanticLabel: '${preset.gear}挡位',
+                    onChanged: busy ? null : (_) => onGearChanged(preset.gear),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(preset.gear),
+                          const SizedBox(height: 2),
+                          Text(
+                            preset.levels.length == 1
+                                ? '${preset.levels.first.rpm} RPM'
+                                : '${preset.levels.first.rpm}–${preset.levels.last.rpm} RPM',
+                            style: fluent.FluentTheme.of(
+                              context,
+                            ).typography.caption,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (selected.levels.length > 1) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Text('小挡位'),
+                const SizedBox(width: 16),
+                for (final item in selected.levels) ...[
+                  fluent.ToggleButton(
+                    checked: item.level == level.level,
+                    semanticLabel: '${item.level}挡 ${item.rpm} RPM',
+                    onChanged: busy ? null : (_) => onLevelChanged(item.level),
+                    child: Text('${item.level} · ${item.rpm} RPM'),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ManualGearRpmDialog extends StatefulWidget {
+  const _ManualGearRpmDialog({required this.initial});
+
+  final Object? initial;
+
+  @override
+  State<_ManualGearRpmDialog> createState() => _ManualGearRpmDialogState();
+}
+
+class _ManualGearRpmDialogState extends State<_ManualGearRpmDialog> {
+  late Map<String, dynamic> values;
+
+  @override
+  void initState() {
+    super.initState();
+    values = normalizeManualGearRpmMap(widget.initial);
+  }
+
+  @override
+  Widget build(BuildContext context) => fluent.ContentDialog(
+    title: const Text('自定义挡位转速'),
+    content: SizedBox(
+      width: 600,
+      height: 390,
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const fluent.InfoBar(
+              title: Text('转速顺序'),
+              content: Text('保存时会将 12 个挡位限制在 800–4500 RPM，并保证从低到高不递减。'),
+            ),
+            const SizedBox(height: 12),
+            for (final preset in manualGearPresets) ...[
+              Text(
+                preset.gear,
+                style: fluent.FluentTheme.of(context).typography.bodyStrong,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  for (final item in preset.levels) ...[
+                    Expanded(
+                      child: fluent.InfoLabel(
+                        label: item.level,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: fluent.NumberBox<int>(
+                                value:
+                                    (_stringMap(
+                                          values[preset.gear],
+                                        )?[item.level]
+                                        as int),
+                                min: 800,
+                                max: 4500,
+                                smallChange: 50,
+                                largeChange: 200,
+                                clearButton: false,
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setState(() {
+                                    values[preset.gear] = {
+                                      ...?_stringMap(values[preset.gear]),
+                                      item.level: value,
+                                    };
+                                  });
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text('RPM'),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 14),
+            ],
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      fluent.Button(
+        onPressed: () => setState(() {
+          values = normalizeManualGearRpmMap(null);
+        }),
+        child: const Text('恢复默认'),
+      ),
+      fluent.FilledButton(
+        onPressed: () =>
+            Navigator.pop(context, normalizeManualGearRpmMap(values)),
+        child: const Text('保存'),
+      ),
+      fluent.Button(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+    ],
+  );
+}
+
+class _SettingRow extends StatelessWidget {
+  const _SettingRow({
+    required this.title,
+    required this.description,
+    required this.trailing,
+  });
+
+  final String title;
+  final String description;
+  final Widget trailing;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title),
+              const SizedBox(height: 2),
+              Text(
+                description,
+                style: fluent.FluentTheme.of(context).typography.caption,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 16),
+        trailing,
+      ],
+    ),
+  );
+}
+
+class _LearningCard extends StatelessWidget {
+  const _LearningCard({
+    required this.config,
+    required this.points,
+    required this.hasLaptopFan,
+    required this.busy,
+    required this.controlsEnabled,
+    required this.targetTemp,
+    required this.onUpdate,
+    required this.onTargetChanged,
+    required this.onTargetCommitted,
+    required this.onReset,
+  });
+
+  final Map<String, dynamic> config;
+  final List<FanCurvePoint> points;
+  final bool hasLaptopFan;
+  final bool busy;
+  final bool controlsEnabled;
+  final double targetTemp;
+  final ValueChanged<Map<String, dynamic>> onUpdate;
+  final ValueChanged<double> onTargetChanged;
+  final ValueChanged<double> onTargetCommitted;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final learning = config['learning'] == true;
+    final bias = config['learningBias'] as String;
+    final offsets = summarizeLearnedOffsets(
+      points,
+      config['learnedOffsets'],
+      bias,
+    );
+    final enabled = controlsEnabled && !busy;
+    final biasDescription = switch (bias) {
+      'cooling' => '只允许学习增加转速，避免待机温度被学高。',
+      'quiet' => '只允许学习降低转速，避免自动把风扇拉高。',
+      _ => '允许学习曲线在基础曲线上下微调。',
+    };
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.machine_learning,
+      title: '自适应学习',
+      description: '长期运行后微调各温度点转速，使稳态温度更接近目标。',
+      trailing: fluent.ToggleSwitch(
+        key: const ValueKey('fan-curve-learning'),
+        checked: learning,
+        semanticLabel: '自适应学习',
+        onChanged: enabled ? (value) => onUpdate({'learning': value}) : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _SettingRow(
+            title: '提前升速',
+            description: '功耗突增或温度上升时按预计温度提前升速，只提前升速、不提前降速。',
+            trailing: fluent.ToggleSwitch(
+              checked: config['predictiveBoost'] == true,
+              semanticLabel: '提前升速',
+              onChanged: enabled && learning
+                  ? (value) => onUpdate({'predictiveBoost': value})
+                  : null,
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '过滤瞬时尖峰',
+            description: '忽略孤立温度尖峰，避免短暂读数让风扇频繁升降。',
+            trailing: fluent.ToggleSwitch(
+              checked: config['filterTransientSpike'] != false,
+              semanticLabel: '过滤瞬时温度尖峰',
+              onChanged: enabled
+                  ? (value) => onUpdate({'filterTransientSpike': value})
+                  : null,
+            ),
+          ),
+          if (hasLaptopFan) ...[
+            const fluent.Divider(),
+            _SettingRow(
+              title: '笔记本风扇高转时缓慢降速',
+              description: '本机风扇仍接近高转速时限制散热器降速，减少温度和转速来回摆动。',
+              trailing: fluent.ToggleSwitch(
+                checked: config['laptopFanGuard'] == true,
+                semanticLabel: '笔记本风扇高转时缓慢降速',
+                onChanged: enabled && learning
+                    ? (value) => onUpdate({'laptopFanGuard': value})
+                    : null,
+              ),
+            ),
+          ],
+          const fluent.Divider(),
+          _SettingRow(
+            title: '学习倾向',
+            description: biasDescription,
+            trailing: SizedBox(
+              width: 160,
+              height: 34,
+              child: fluent.ComboBox<String>(
+                value: bias,
+                isExpanded: true,
+                items: const [
+                  fluent.ComboBoxItem(value: 'balanced', child: Text('均衡')),
+                  fluent.ComboBoxItem(value: 'cooling', child: Text('散热优先')),
+                  fluent.ComboBoxItem(value: 'quiet', child: Text('静音优先')),
+                ],
+                onChanged: enabled
+                    ? (value) {
+                        if (value != null) onUpdate({'learningBias': value});
+                      }
+                    : null,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '目标温度',
+            description: '学习模式会尽量把稳态温度收敛到这个上限附近。',
+            trailing: SizedBox(
+              width: 300,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: fluent.Slider(
+                      value: targetTemp.clamp(45, 90),
+                      min: 45,
+                      max: 90,
+                      divisions: 45,
+                      label: '${targetTemp.round()}°C',
+                      onChanged: enabled ? onTargetChanged : null,
+                      onChangeEnd: enabled ? onTargetCommitted : null,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 64,
+                    child: fluent.NumberBox<int>(
+                      key: const ValueKey('fan-curve-target-temperature'),
+                      value: targetTemp.round(),
+                      min: 45,
+                      max: 90,
+                      mode: fluent.SpinButtonPlacementMode.none,
+                      clearButton: false,
+                      textAlign: TextAlign.center,
+                      onChanged: enabled
+                          ? (value) {
+                              if (value == null) return;
+                              onTargetChanged(value.toDouble());
+                              onTargetCommitted(value.toDouble());
+                            }
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text('°C'),
+                ],
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '学习偏移',
+            description: '当前学习曲线相对基础曲线的主要 RPM 修正点。',
+            trailing: fluent.Button(
+              onPressed: enabled && offsets.isNotEmpty ? onReset : null,
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(fluent.FluentIcons.reset, size: 16),
+                  SizedBox(width: 8),
+                  Text('重置学习'),
+                ],
+              ),
+            ),
+          ),
+          if (offsets.isEmpty)
+            Text(
+              '暂无学习偏移',
+              style: fluent.FluentTheme.of(context).typography.caption,
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final offset in offsets)
+                  _ValueBadge(
+                    text:
+                        '${offset.temperature}°C  ${offset.rpm > 0 ? '+' : ''}${offset.rpm} RPM',
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ValueBadge extends StatelessWidget {
+  const _ValueBadge({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = fluent.FluentTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: theme.brightness == Brightness.dark
+            ? Colors.white.withAlpha(10)
+            : Colors.black.withAlpha(6),
+        border: Border.all(color: theme.resources.dividerStrokeColorDefault),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(text, style: theme.typography.caption),
+    );
+  }
+}
+
+class _NumberSetting extends StatelessWidget {
+  const _NumberSetting({
+    required this.title,
+    required this.description,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.step,
+    required this.suffix,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final String title;
+  final String description;
+  final int value;
+  final int min;
+  final int max;
+  final int step;
+  final String suffix;
+  final bool enabled;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = fluent.FluentTheme.of(context);
+    return Container(
+      width: 210,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.resources.dividerStrokeColorDefault),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: theme.typography.bodyStrong),
+          const SizedBox(height: 4),
+          SizedBox(
+            height: 34,
+            child: Text(description, style: theme.typography.caption),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: fluent.NumberBox<int>(
+                  value: value,
+                  min: min,
+                  max: max,
+                  smallChange: step,
+                  largeChange: step * 4,
+                  clearButton: false,
+                  onChanged: enabled
+                      ? (value) {
+                          if (value != null) onChanged(value);
+                        }
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(suffix),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SpeedAvoidanceCard extends StatelessWidget {
+  const _SpeedAvoidanceCard({
+    required this.config,
+    required this.revealed,
+    required this.busy,
+    required this.controlsEnabled,
+    required this.autoControl,
+    required this.targetRpm,
+    required this.onReveal,
+    required this.onUpdate,
+  });
+
+  final Map<String, dynamic> config;
+  final bool revealed;
+  final bool busy;
+  final bool controlsEnabled;
+  final bool autoControl;
+  final int? targetRpm;
+  final VoidCallback onReveal;
+  final ValueChanged<Map<String, dynamic>> onUpdate;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = controlsEnabled && !busy;
+    final minRpm = config['minRpm'] as int;
+    final maxRpm = config['maxRpm'] as int;
+    final active =
+        config['enabled'] == true &&
+        targetRpm != null &&
+        targetRpm! >= minRpm &&
+        targetRpm! <= maxRpm;
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.warning,
+      title: '避噪转速区间',
+      description: '自动控温目标落入噪音敏感区间时跳到区间外，减少轴噪概率。',
+      trailing: revealed
+          ? fluent.ToggleSwitch(
+              key: const ValueKey('fan-curve-speed-avoidance'),
+              checked: config['enabled'] == true,
+              semanticLabel: '避噪转速区间',
+              onChanged: enabled
+                  ? (value) => onUpdate({'enabled': value})
+                  : null,
+            )
+          : fluent.Button(
+              onPressed: enabled ? onReveal : null,
+              child: const Text('调参'),
+            ),
+      child: revealed
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    _NumberSetting(
+                      title: '区间起点',
+                      description: '噪音区间的较低转速边界。',
+                      value: minRpm,
+                      min: 800,
+                      max: 4500,
+                      step: 50,
+                      suffix: 'RPM',
+                      enabled: enabled,
+                      onChanged: (value) => onUpdate({'minRpm': value}),
+                    ),
+                    _NumberSetting(
+                      title: '区间终点',
+                      description: '噪音区间的较高转速边界。',
+                      value: maxRpm,
+                      min: 800,
+                      max: 4500,
+                      step: 50,
+                      suffix: 'RPM',
+                      enabled: enabled,
+                      onChanged: (value) => onUpdate({'maxRpm': value}),
+                    ),
+                    _NumberSetting(
+                      title: '避让余量',
+                      description: '额外向区间外跳开的转速余量。',
+                      value: config['marginRpm'] as int,
+                      min: 50,
+                      max: 500,
+                      step: 50,
+                      suffix: 'RPM',
+                      enabled: enabled,
+                      onChanged: (value) => onUpdate({'marginRpm': value}),
+                    ),
+                    _NumberSetting(
+                      title: '高温旁路',
+                      description: '达到该温度时优先散热，不再避让。',
+                      value: config['emergencyBypassTemp'] as int,
+                      min: 60,
+                      max: 95,
+                      step: 1,
+                      suffix: '°C',
+                      enabled: enabled,
+                      onChanged: (value) =>
+                          onUpdate({'emergencyBypassTemp': value}),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _ValueBadge(
+                      text:
+                          '避让区间 $minRpm–$maxRpm RPM，余量 ${config['marginRpm']} RPM',
+                    ),
+                    if (active) _ValueBadge(text: '当前目标 $targetRpm RPM 处于敏感区间'),
+                    if (!autoControl) const _ValueBadge(text: '仅在智能控温模式下生效'),
+                  ],
+                ),
+              ],
+            )
+          : const fluent.InfoBar(
+              title: Text('高级设置'),
+              content: Text('参数需要结合设备实测噪音调整；不清楚需求时请保持关闭。'),
+              severity: fluent.InfoBarSeverity.warning,
+            ),
+    );
+  }
+}
+
+typedef _ScheduleRuleChanged =
+    void Function(String id, Map<String, dynamic> patch);
+
+class _ScheduleCard extends StatelessWidget {
+  const _ScheduleCard({
+    required this.config,
+    required this.profiles,
+    required this.currentRule,
+    required this.busy,
+    required this.controlsEnabled,
+    required this.onEnabledChanged,
+    required this.onAdd,
+    required this.onRuleChanged,
+    required this.onRuleDeleted,
+  });
+
+  final Map<String, dynamic> config;
+  final List<FanCurveProfileOption> profiles;
+  final Map<String, dynamic>? currentRule;
+  final bool busy;
+  final bool controlsEnabled;
+  final ValueChanged<bool> onEnabledChanged;
+  final VoidCallback onAdd;
+  final _ScheduleRuleChanged onRuleChanged;
+  final ValueChanged<String> onRuleDeleted;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = controlsEnabled && !busy;
+    final rules = (config['rules'] as List).cast<Map<String, dynamic>>();
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.clock,
+      title: '分时曲线',
+      description: '按时间段自动切换曲线方案，适合白天性能、夜间静音等场景。',
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          fluent.Button(
+            key: const ValueKey('fan-curve-schedule-add'),
+            onPressed: enabled && profiles.isNotEmpty ? onAdd : null,
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(fluent.FluentIcons.add, size: 16),
+                SizedBox(width: 8),
+                Text('新增规则'),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          fluent.ToggleSwitch(
+            key: const ValueKey('fan-curve-schedule-enabled'),
+            checked: config['enabled'] == true,
+            semanticLabel: '分时曲线',
+            onChanged: enabled ? onEnabledChanged : null,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          fluent.InfoBar(
+            title: Text(
+              currentRule == null
+                  ? '当前时间没有命中任何规则'
+                  : '当前规则：${currentRule!['name']}',
+            ),
+            content: const Text('分时计划只切换活动曲线方案，不会强制开启智能控温。'),
+            severity: currentRule == null
+                ? fluent.InfoBarSeverity.info
+                : fluent.InfoBarSeverity.success,
+          ),
+          const SizedBox(height: 12),
+          if (rules.isEmpty)
+            Text(
+              '还没有分时规则，点击右上角新增。',
+              style: fluent.FluentTheme.of(context).typography.caption,
+            )
+          else
+            for (var index = 0; index < rules.length; index++) ...[
+              _ScheduleRuleCard(
+                key: ValueKey(rules[index]['id']),
+                rule: rules[index],
+                profiles: profiles,
+                busy: !enabled,
+                onChanged: onRuleChanged,
+                onDeleted: onRuleDeleted,
+              ),
+              if (index != rules.length - 1) const SizedBox(height: 10),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ScheduleRuleCard extends StatefulWidget {
+  const _ScheduleRuleCard({
+    required this.rule,
+    required this.profiles,
+    required this.busy,
+    required this.onChanged,
+    required this.onDeleted,
+    super.key,
+  });
+
+  final Map<String, dynamic> rule;
+  final List<FanCurveProfileOption> profiles;
+  final bool busy;
+  final _ScheduleRuleChanged onChanged;
+  final ValueChanged<String> onDeleted;
+
+  @override
+  State<_ScheduleRuleCard> createState() => _ScheduleRuleCardState();
+}
+
+class _ScheduleRuleCardState extends State<_ScheduleRuleCard> {
+  late final TextEditingController nameController;
+  late final FocusNode nameFocusNode;
+
+  String get id => widget.rule['id'] as String;
+
+  @override
+  void initState() {
+    super.initState();
+    nameController = TextEditingController(text: widget.rule['name'] as String);
+    nameFocusNode = FocusNode();
+  }
+
+  @override
+  void didUpdateWidget(_ScheduleRuleCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final name = widget.rule['name'] as String;
+    if (!nameFocusNode.hasFocus && nameController.text != name) {
+      nameController.text = name;
+    }
+  }
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    nameFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _commitName() {
+    final fallback = widget.rule['name'] as String;
+    final value = nameController.text.trim();
+    if (value.isEmpty) {
+      nameController.text = fallback;
+    } else if (value != fallback) {
+      widget.onChanged(id, {'name': value});
+    }
+  }
+
+  DateTime _time(String key) {
+    final parts = (widget.rule[key] as String).split(':');
+    return DateTime(2000, 1, 1, int.parse(parts[0]), int.parse(parts[1]));
+  }
+
+  String _formatTime(DateTime value) =>
+      '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = fluent.FluentTheme.of(context);
+    final weekdays = (widget.rule['weekdays'] as List).cast<int>();
+    const weekdayLabels = {
+      1: '一',
+      2: '二',
+      3: '三',
+      4: '四',
+      5: '五',
+      6: '六',
+      0: '日',
+    };
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.resources.dividerStrokeColorDefault),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: fluent.InfoLabel(
+                  label: '规则名称',
+                  child: fluent.TextBox(
+                    controller: nameController,
+                    focusNode: nameFocusNode,
+                    enabled: !widget.busy,
+                    placeholder: '例如：深夜静音',
+                    textInputAction: TextInputAction.done,
+                    suffix: fluent.Tooltip(
+                      message: '保存名称',
+                      child: fluent.IconButton(
+                        icon: const Icon(fluent.FluentIcons.accept, size: 14),
+                        onPressed: widget.busy ? null : _commitName,
+                      ),
+                    ),
+                    onSubmitted: (_) => _commitName(),
+                    onTapOutside: (_) => nameFocusNode.unfocus(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              fluent.ToggleSwitch(
+                checked: widget.rule['enabled'] == true,
+                semanticLabel: '启用 ${widget.rule['name']}',
+                onChanged: widget.busy
+                    ? null
+                    : (value) => widget.onChanged(id, {'enabled': value}),
+              ),
+              const SizedBox(width: 8),
+              fluent.IconButton(
+                icon: const Icon(fluent.FluentIcons.delete),
+                onPressed: widget.busy ? null : () => widget.onDeleted(id),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.end,
+            children: [
+              SizedBox(
+                width: 190,
+                child: fluent.InfoLabel(
+                  label: '曲线方案',
+                  child: fluent.ComboBox<String>(
+                    value: widget.rule['curveProfileId'] as String,
+                    isExpanded: true,
+                    items: [
+                      for (final profile in widget.profiles)
+                        fluent.ComboBoxItem(
+                          value: profile.id,
+                          child: Text(profile.name),
+                        ),
+                    ],
+                    onChanged: widget.busy
+                        ? null
+                        : (value) {
+                            if (value != null) {
+                              widget.onChanged(id, {'curveProfileId': value});
+                            }
+                          },
+                  ),
+                ),
+              ),
+              fluent.TimePicker(
+                selected: _time('startTime'),
+                header: '开始时间',
+                hourFormat: fluent.HourFormat.HH,
+                onChanged: widget.busy
+                    ? null
+                    : (value) => widget.onChanged(id, {
+                        'startTime': _formatTime(value),
+                      }),
+              ),
+              fluent.TimePicker(
+                selected: _time('endTime'),
+                header: '结束时间',
+                hourFormat: fluent.HourFormat.HH,
+                onChanged: widget.busy
+                    ? null
+                    : (value) =>
+                          widget.onChanged(id, {'endTime': _formatTime(value)}),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: Text('生效日期'),
+              ),
+              for (final day in _weekdaySequence)
+                fluent.ToggleButton(
+                  checked: weekdays.contains(day),
+                  semanticLabel: '星期${weekdayLabels[day]}',
+                  onChanged: widget.busy
+                      ? null
+                      : (_) {
+                          final next = weekdays.contains(day)
+                              ? weekdays.where((item) => item != day).toList()
+                              : [...weekdays, day];
+                          if (next.isNotEmpty) {
+                            widget.onChanged(id, {
+                              'weekdays': normalizeScheduleWeekdays(next),
+                            });
+                          }
+                        },
+                  child: Text(weekdayLabels[day]!),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1096,11 +2740,13 @@ Offset _fanCurvePointPosition(
   chart.bottom - chart.height * point.rpm / 4000,
 );
 
-class _FanCurveChart extends StatelessWidget {
+class _FanCurveChart extends StatefulWidget {
   const _FanCurveChart({
     required this.points,
+    required this.learnedPoints,
     required this.currentTemperature,
     required this.curveColor,
+    required this.learnedColor,
     required this.markerColor,
     required this.gridColor,
     required this.labelColor,
@@ -1108,11 +2754,14 @@ class _FanCurveChart extends StatelessWidget {
     required this.onDragStart,
     required this.onDragUpdate,
     required this.onDragEnd,
+    super.key,
   });
 
   final List<FanCurvePoint> points;
+  final List<FanCurvePoint> learnedPoints;
   final double currentTemperature;
   final Color curveColor;
+  final Color learnedColor;
   final Color markerColor;
   final Color gridColor;
   final Color labelColor;
@@ -1122,89 +2771,177 @@ class _FanCurveChart extends StatelessWidget {
   final VoidCallback onDragEnd;
 
   @override
+  State<_FanCurveChart> createState() => _FanCurveChartState();
+}
+
+class _FanCurveChartState extends State<_FanCurveChart> {
+  int? selectedIndex;
+  Offset? pointerPosition;
+
+  @override
+  void didUpdateWidget(_FanCurveChart oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (selectedIndex != null && selectedIndex! >= widget.points.length) {
+      selectedIndex = null;
+    }
+  }
+
+  void _selectAt(Offset position, Rect chart) {
+    int? next;
+    Offset? nextPosition;
+    if (chart.contains(position)) {
+      nextPosition = position;
+      var closestDistance = double.infinity;
+      for (var index = 0; index < widget.points.length; index++) {
+        final distance =
+            (_fanCurvePointPosition(
+                      chart,
+                      widget.points,
+                      widget.points[index],
+                    ).dx -
+                    position.dx)
+                .abs();
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          next = index;
+        }
+      }
+    }
+    if (next != selectedIndex || nextPosition != pointerPosition) {
+      setState(() {
+        selectedIndex = next;
+        pointerPosition = nextPosition;
+      });
+    }
+  }
+
+  void _clearSelection() {
+    if (selectedIndex != null || pointerPosition != null) {
+      setState(() {
+        selectedIndex = null;
+        pointerPosition = null;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
         final chart = _fanCurveChartRect(size);
-        final handleBorder = Theme.of(context).colorScheme.surface;
-        return Stack(
-          children: [
-            CustomPaint(
-              size: size,
-              painter: FanCurvePainter(
-                points: points,
-                currentTemperature: currentTemperature,
-                curveColor: curveColor,
-                markerColor: markerColor,
-                gridColor: gridColor,
-                labelColor: labelColor,
+        final handleBorder = fluent.FluentTheme.of(context).cardColor;
+        final index = selectedIndex;
+        final selected = index == null ? null : widget.points[index];
+        const tooltipWidth = 224.0;
+        const tooltipHeight = 96.0;
+        final pointer = pointerPosition;
+        var tooltipLeft = (pointer?.dx ?? 0) + 14;
+        if (tooltipLeft + tooltipWidth > size.width) {
+          tooltipLeft = (pointer?.dx ?? 0) - tooltipWidth - 14;
+        }
+        tooltipLeft = tooltipLeft
+            .clamp(4.0, math.max(4.0, size.width - tooltipWidth - 4))
+            .toDouble();
+        var tooltipTop = (pointer?.dy ?? 0) + 14;
+        if (tooltipTop + tooltipHeight > size.height) {
+          tooltipTop = (pointer?.dy ?? 0) - tooltipHeight - 14;
+        }
+        tooltipTop = tooltipTop
+            .clamp(4.0, math.max(4.0, size.height - tooltipHeight - 4))
+            .toDouble();
+        return MouseRegion(
+          onHover: (event) => _selectAt(event.localPosition, chart),
+          onExit: (_) => _clearSelection(),
+          child: Stack(
+            children: [
+              RepaintBoundary(
+                child: CustomPaint(
+                  size: size,
+                  painter: FanCurvePainter(
+                    points: widget.points,
+                    learnedPoints: widget.learnedPoints,
+                    currentTemperature: widget.currentTemperature,
+                    curveColor: widget.curveColor,
+                    learnedColor: widget.learnedColor,
+                    markerColor: widget.markerColor,
+                    gridColor: widget.gridColor,
+                    labelColor: widget.labelColor,
+                    selectedIndex: selectedIndex,
+                  ),
+                ),
               ),
-            ),
-            if (chart.width > 0 && chart.height > 0)
-              for (var index = 0; index < points.length; index++)
-                Positioned(
-                  left:
-                      _fanCurvePointPosition(chart, points, points[index]).dx -
-                      12,
-                  top:
-                      _fanCurvePointPosition(chart, points, points[index]).dy -
-                      12,
-                  width: 24,
-                  height: 24,
-                  child: Semantics(
-                    slider: true,
-                    label: '${points[index].temperature}°C 控制点',
-                    value: '${points[index].rpm} RPM',
-                    increasedValue:
-                        '${(points[index].rpm + 50).clamp(0, 4000)} RPM',
-                    decreasedValue:
-                        '${(points[index].rpm - 50).clamp(0, 4000)} RPM',
-                    onIncrease: editable
-                        ? () {
-                            onDragStart(index);
-                            onDragUpdate(index, 50);
-                            onDragEnd();
-                          }
-                        : null,
-                    onDecrease: editable
-                        ? () {
-                            onDragStart(index);
-                            onDragUpdate(index, -50);
-                            onDragEnd();
-                          }
-                        : null,
-                    child: Tooltip(
-                      message:
-                          '${points[index].temperature}°C · ${points[index].rpm} RPM',
+              if (chart.width > 0 && chart.height > 0)
+                for (var index = 0; index < widget.points.length; index++)
+                  Positioned(
+                    left:
+                        _fanCurvePointPosition(
+                          chart,
+                          widget.points,
+                          widget.points[index],
+                        ).dx -
+                        12,
+                    top:
+                        _fanCurvePointPosition(
+                          chart,
+                          widget.points,
+                          widget.points[index],
+                        ).dy -
+                        12,
+                    width: 24,
+                    height: 24,
+                    child: Semantics(
+                      slider: true,
+                      label: '${widget.points[index].temperature}°C 控制点',
+                      value: '${widget.points[index].rpm} RPM',
+                      increasedValue:
+                          '${(widget.points[index].rpm + 50).clamp(0, 4000)} RPM',
+                      decreasedValue:
+                          '${(widget.points[index].rpm - 50).clamp(0, 4000)} RPM',
+                      onIncrease: widget.editable
+                          ? () {
+                              widget.onDragStart(index);
+                              widget.onDragUpdate(index, 50);
+                              widget.onDragEnd();
+                            }
+                          : null,
+                      onDecrease: widget.editable
+                          ? () {
+                              widget.onDragStart(index);
+                              widget.onDragUpdate(index, -50);
+                              widget.onDragEnd();
+                            }
+                          : null,
                       child: MouseRegion(
-                        cursor: editable
+                        cursor: widget.editable
                             ? SystemMouseCursors.resizeUpDown
                             : MouseCursor.defer,
                         child: GestureDetector(
                           key: ValueKey('fan-curve-point-$index'),
                           behavior: HitTestBehavior.opaque,
-                          onVerticalDragStart: editable
-                              ? (_) => onDragStart(index)
+                          onVerticalDragStart: widget.editable
+                              ? (_) => widget.onDragStart(index)
                               : null,
-                          onVerticalDragUpdate: editable
-                              ? (details) => onDragUpdate(
+                          onVerticalDragUpdate: widget.editable
+                              ? (details) => widget.onDragUpdate(
                                   index,
                                   -(details.primaryDelta ?? 0) *
                                       4000 /
                                       chart.height,
                                 )
                               : null,
-                          onVerticalDragEnd: editable
-                              ? (_) => onDragEnd()
+                          onVerticalDragEnd: widget.editable
+                              ? (_) => widget.onDragEnd()
                               : null,
-                          onVerticalDragCancel: editable ? onDragEnd : null,
+                          onVerticalDragCancel: widget.editable
+                              ? widget.onDragEnd
+                              : null,
                           child: Center(
                             child: Container(
                               width: 12,
                               height: 12,
                               decoration: BoxDecoration(
-                                color: curveColor,
+                                color: widget.curveColor,
                                 shape: BoxShape.circle,
                                 border: Border.all(
                                   color: handleBorder,
@@ -1217,30 +2954,103 @@ class _FanCurveChart extends StatelessWidget {
                       ),
                     ),
                   ),
+              if (selected != null)
+                AnimatedPositioned(
+                  key: const ValueKey('fan-curve-tooltip-position'),
+                  duration: const Duration(milliseconds: 90),
+                  curve: Curves.easeOutCubic,
+                  left: tooltipLeft,
+                  top: tooltipTop,
+                  width: tooltipWidth,
+                  child: IgnorePointer(child: _curveTooltip(context, index!)),
                 ),
-          ],
+            ],
+          ),
         );
       },
     );
   }
+
+  Widget _curveTooltip(BuildContext context, int index) {
+    final theme = fluent.FluentTheme.of(context);
+    final point = widget.points[index];
+    return fluent.FlyoutContent(
+      key: const ValueKey('fan-curve-tooltip'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '温度：${point.temperature} °C',
+            style: theme.typography.bodyStrong,
+          ),
+          _curveTooltipRow(
+            context,
+            widget.curveColor,
+            '基础曲线',
+            '${point.rpm} RPM',
+          ),
+          if (widget.learnedPoints.length == widget.points.length)
+            _curveTooltipRow(
+              context,
+              widget.learnedColor,
+              '学习曲线',
+              '${widget.learnedPoints[index].rpm} RPM',
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _curveTooltipRow(
+    BuildContext context,
+    Color color,
+    String label,
+    String value,
+  ) => Padding(
+    padding: const EdgeInsets.only(top: 4),
+    child: Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 7),
+        Text(label),
+        const Spacer(),
+        Text(
+          value,
+          style: fluent.FluentTheme.of(context).typography.bodyStrong,
+        ),
+      ],
+    ),
+  );
 }
 
 class FanCurvePainter extends CustomPainter {
   const FanCurvePainter({
     required this.points,
+    required this.learnedPoints,
     required this.currentTemperature,
     required this.curveColor,
+    required this.learnedColor,
     required this.markerColor,
     required this.gridColor,
     required this.labelColor,
+    required this.selectedIndex,
   });
 
   final List<FanCurvePoint> points;
+  final List<FanCurvePoint> learnedPoints;
   final double currentTemperature;
   final Color curveColor;
+  final Color learnedColor;
   final Color markerColor;
   final Color gridColor;
   final Color labelColor;
+  final int? selectedIndex;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1276,6 +3086,30 @@ class FanCurvePainter extends CustomPainter {
       );
     }
 
+    if (learnedPoints.length == points.length) {
+      final learnedPath = Path();
+      for (var index = 0; index < learnedPoints.length; index++) {
+        final offset = _fanCurvePointPosition(
+          chart,
+          learnedPoints,
+          learnedPoints[index],
+        );
+        if (index == 0) {
+          learnedPath.moveTo(offset.dx, offset.dy);
+        } else {
+          learnedPath.lineTo(offset.dx, offset.dy);
+        }
+      }
+      _drawDashedPath(
+        canvas,
+        learnedPath,
+        Paint()
+          ..color = learnedColor
+          ..strokeWidth = 2
+          ..style = PaintingStyle.stroke,
+      );
+    }
+
     final path = Path();
     for (var index = 0; index < points.length; index++) {
       final offset = _fanCurvePointPosition(chart, points, points[index]);
@@ -1301,6 +3135,18 @@ class FanCurvePainter extends CustomPainter {
       );
     }
 
+    final activeIndex = selectedIndex;
+    if (activeIndex != null && activeIndex < points.length) {
+      canvas.drawCircle(
+        _fanCurvePointPosition(chart, points, points[activeIndex]),
+        8,
+        Paint()
+          ..color = curveColor
+          ..strokeWidth = 2
+          ..style = PaintingStyle.stroke,
+      );
+    }
+
     if (currentTemperature >= points.first.temperature &&
         currentTemperature <= points.last.temperature) {
       final x =
@@ -1320,12 +3166,26 @@ class FanCurvePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(FanCurvePainter oldDelegate) =>
-      oldDelegate.points != points ||
+      !listEquals(oldDelegate.points, points) ||
+      !listEquals(oldDelegate.learnedPoints, learnedPoints) ||
       oldDelegate.currentTemperature != currentTemperature ||
       oldDelegate.curveColor != curveColor ||
+      oldDelegate.learnedColor != learnedColor ||
       oldDelegate.markerColor != markerColor ||
       oldDelegate.gridColor != gridColor ||
-      oldDelegate.labelColor != labelColor;
+      oldDelegate.labelColor != labelColor ||
+      oldDelegate.selectedIndex != selectedIndex;
+}
+
+void _drawDashedPath(Canvas canvas, Path path, Paint paint) {
+  for (final metric in path.computeMetrics()) {
+    for (var distance = 0.0; distance < metric.length; distance += 10) {
+      canvas.drawPath(
+        metric.extractPath(distance, math.min(distance + 6, metric.length)),
+        paint,
+      );
+    }
+  }
 }
 
 class _TemperatureHistoryCard extends StatefulWidget {
@@ -1384,12 +3244,20 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
+    final theme = fluent.FluentTheme.of(context);
     final dark = theme.brightness == Brightness.dark;
     final cpuColor = dark ? const Color(0xffffb74d) : const Color(0xffe65100);
     final gpuColor = dark ? const Color(0xff64b5f6) : const Color(0xff1565c0);
     final fanColor = dark ? const Color(0xff81c784) : const Color(0xff2e7d32);
+    final cpuPowerColor = dark
+        ? const Color(0xffb39ddb)
+        : const Color(0xff6a1b9a);
+    final gpuPowerColor = dark
+        ? const Color(0xfff48fb1)
+        : const Color(0xffad1457);
+    final hasPower = points.any(
+      (point) => point.cpuPower > 0 || point.gpuPower > 0,
+    );
     final snapshot = widget.snapshot;
     final retentionOptions = {
       1,
@@ -1401,70 +3269,80 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
       snapshot.retentionHours,
     }.toList()..sort();
     final controlsEnabled = widget.controlsEnabled && !widget.busy;
-    return Card(
+    return fluent.Card(
       key: const ValueKey('temperature-history-card'),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.history),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '温度历史',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      Text(
-                        snapshot.enabled
-                            ? '${snapshot.points.length} 个采样 · 后台保留 ${snapshot.retentionHours} 小时'
-                            : '后台记录已关闭',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-                if (widget.busy) ...[
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                const Text('后台记录'),
-                Switch(
-                  key: const ValueKey('temperature-history-enabled'),
-                  value: snapshot.enabled,
-                  onChanged: controlsEnabled ? widget.onEnabledChanged : null,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                _historyLegend(cpuColor, 'CPU 温度'),
-                _historyLegend(gpuColor, 'GPU 温度'),
-                _historyLegend(fanColor, '散热器转速'),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(fluent.FluentIcons.history),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('保留'),
-                    const SizedBox(width: 6),
-                    DropdownButton<int>(
+                    Text('硬件历史', style: theme.typography.subtitle),
+                    Text(
+                      snapshot.enabled
+                          ? '${snapshot.points.length} 个采样 · 后台保留 ${snapshot.retentionHours} 小时'
+                          : '后台记录已关闭',
+                      style: theme.typography.caption,
+                    ),
+                  ],
+                ),
+              ),
+              if (widget.busy) ...[
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: fluent.ProgressRing(strokeWidth: 2),
+                ),
+                const SizedBox(width: 8),
+              ],
+              const Text('后台记录'),
+              const SizedBox(width: 8),
+              fluent.ToggleSwitch(
+                key: const ValueKey('temperature-history-enabled'),
+                checked: snapshot.enabled,
+                semanticLabel: '后台温度记录',
+                onChanged: controlsEnabled ? widget.onEnabledChanged : null,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 24,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  _historyLegend(cpuColor, 'CPU 温度'),
+                  _historyLegend(gpuColor, 'GPU 温度'),
+                  _historyLegend(fanColor, '散热器转速'),
+                  if (hasPower) _historyLegend(cpuPowerColor, 'CPU 功耗'),
+                  if (hasPower) _historyLegend(gpuPowerColor, 'GPU 功耗'),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('保留'),
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 96,
+                    child: fluent.ComboBox<int>(
                       key: const ValueKey('temperature-history-retention'),
                       value: snapshot.retentionHours,
-                      isDense: true,
+                      isExpanded: true,
                       items: [
                         for (final hours in retentionOptions)
-                          DropdownMenuItem(
+                          fluent.ComboBoxItem(
                             value: hours,
                             child: Text('$hours 小时'),
                           ),
@@ -1477,39 +3355,35 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
                             }
                           : null,
                     ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (points.length < 2)
-              const SizedBox(
-                height: 160,
-                child: Center(child: Text('等待 Core 记录更多温度采样')),
-              )
-            else
-              Semantics(
-                label:
-                    '温度历史图，${snapshot.points.length} 个采样，包含 CPU、GPU 温度和散热器转速',
-                child: RepaintBoundary(
-                  child: SizedBox(
-                    height: 260,
-                    width: double.infinity,
-                    child: _TemperatureHistoryChart(
-                      key: const ValueKey('temperature-history-chart'),
-                      points: points,
-                      gapThreshold: gapThreshold,
-                      cpuColor: cpuColor,
-                      gpuColor: gpuColor,
-                      fanColor: fanColor,
-                      gridColor: colors.outlineVariant,
-                      labelColor: colors.onSurfaceVariant,
-                    ),
                   ),
-                ),
+                ],
               ),
-          ],
-        ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (points.length < 2)
+            const SizedBox(
+              height: 160,
+              child: Center(child: Text('等待 Core 记录更多硬件采样')),
+            )
+          else
+            Semantics(
+              label:
+                  '硬件历史图，${snapshot.points.length} 个采样，包含 CPU、GPU 温度、功耗和散热器转速',
+              child: _TemperatureHistoryChart(
+                key: const ValueKey('temperature-history-chart'),
+                points: points,
+                gapThreshold: gapThreshold,
+                cpuColor: cpuColor,
+                gpuColor: gpuColor,
+                fanColor: fanColor,
+                cpuPowerColor: cpuPowerColor,
+                gpuPowerColor: gpuPowerColor,
+                gridColor: theme.resources.dividerStrokeColorDefault,
+                labelColor: theme.resources.textFillColorSecondary,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1541,6 +3415,8 @@ class _TemperatureHistoryChart extends StatefulWidget {
     required this.cpuColor,
     required this.gpuColor,
     required this.fanColor,
+    required this.cpuPowerColor,
+    required this.gpuPowerColor,
     required this.gridColor,
     required this.labelColor,
     super.key,
@@ -1551,6 +3427,8 @@ class _TemperatureHistoryChart extends StatefulWidget {
   final Color cpuColor;
   final Color gpuColor;
   final Color fanColor;
+  final Color cpuPowerColor;
+  final Color gpuPowerColor;
   final Color gridColor;
   final Color labelColor;
 
@@ -1561,38 +3439,37 @@ class _TemperatureHistoryChart extends StatefulWidget {
 
 class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
   int? selectedIndex;
+  Offset? pointerPosition;
   ({int start, int end})? zoomDomain;
+  List<TemperatureHistoryPoint>? zoomPoints;
   double? dragStartX;
   double? dragCurrentX;
 
-  List<TemperatureHistoryPoint> get _displayPoints {
-    final domain = zoomDomain;
-    if (domain == null) return widget.points;
-    final points = [
-      for (final point in widget.points)
-        if (point.timestamp >= domain.start && point.timestamp <= domain.end)
-          point,
-    ];
-    return points.length >= 2 ? points : widget.points;
-  }
+  List<TemperatureHistoryPoint> get _displayPoints =>
+      zoomPoints ?? widget.points;
 
   @override
   void didUpdateWidget(_TemperatureHistoryChart oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.points, widget.points)) {
-      selectedIndex = null;
       final domain = zoomDomain;
-      if (domain != null &&
-          widget.points
-                  .where(
-                    (point) =>
-                        point.timestamp >= domain.start &&
-                        point.timestamp <= domain.end,
-                  )
-                  .take(2)
-                  .length <
-              2) {
-        zoomDomain = null;
+      if (domain != null) {
+        final points = [
+          for (final point in widget.points)
+            if (point.timestamp >= domain.start &&
+                point.timestamp <= domain.end)
+              point,
+        ];
+        if (points.length >= 2) {
+          zoomPoints = List.unmodifiable(points);
+        } else {
+          zoomDomain = null;
+          zoomPoints = null;
+        }
+      }
+      if (selectedIndex != null && selectedIndex! >= _displayPoints.length) {
+        selectedIndex = null;
+        pointerPosition = null;
       }
     }
   }
@@ -1631,14 +3508,26 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
     if (dragStartX != null) return;
     final chart = _temperatureHistoryChartRect(size);
     int? next;
-    if (position.dx >= chart.left && position.dx <= chart.right) {
+    Offset? nextPosition;
+    if (chart.contains(position)) {
       next = _pointIndexAt(position.dx, chart, points);
+      nextPosition = position;
     }
-    if (next != selectedIndex) setState(() => selectedIndex = next);
+    if (next != selectedIndex || nextPosition != pointerPosition) {
+      setState(() {
+        selectedIndex = next;
+        pointerPosition = nextPosition;
+      });
+    }
   }
 
   void _clearSelection() {
-    if (selectedIndex != null) setState(() => selectedIndex = null);
+    if (selectedIndex != null || pointerPosition != null) {
+      setState(() {
+        selectedIndex = null;
+        pointerPosition = null;
+      });
+    }
   }
 
   void _startZoom(Offset position, Rect chart) {
@@ -1647,6 +3536,7 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
       dragStartX = position.dx;
       dragCurrentX = position.dx;
       selectedIndex = null;
+      pointerPosition = null;
     });
   }
 
@@ -1690,6 +3580,7 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
           start: points[start].timestamp,
           end: points[end].timestamp,
         );
+        zoomPoints = List.unmodifiable(points.sublist(start, end + 1));
       }
     });
   }
@@ -1698,44 +3589,82 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
     if (zoomDomain == null) return;
     setState(() {
       zoomDomain = null;
+      zoomPoints = null;
       selectedIndex = null;
+      pointerPosition = null;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
+    final hasPower = widget.points.any(
+      (point) => point.cpuPower > 0 || point.gpuPower > 0,
+    );
+    return MouseRegion(
+      onExit: (_) => _clearSelection(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '温度与转速趋势',
+            style: fluent.FluentTheme.of(context).typography.caption,
+          ),
+          const SizedBox(height: 4),
+          _buildPlot(context, power: false),
+          if (hasPower) ...[
+            const SizedBox(height: 12),
+            const fluent.Divider(),
+            const SizedBox(height: 12),
+            Text(
+              '功耗趋势',
+              style: fluent.FluentTheme.of(context).typography.caption,
+            ),
+            const SizedBox(height: 4),
+            _buildPlot(context, power: true),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlot(BuildContext context, {required bool power}) => SizedBox(
+    height: power ? 200 : 260,
+    child: LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
-        final colors = Theme.of(context).colorScheme;
+        final theme = fluent.FluentTheme.of(context);
+        final accent = theme.accentColor.defaultBrushFor(theme.brightness);
         final points = _displayPoints;
         final index = selectedIndex;
         final selected = index == null ? null : points[index];
         final chart = _temperatureHistoryChartRect(size);
-        final span = math.max(
-          1,
-          points.last.timestamp - points.first.timestamp,
-        );
-        final selectedX = selected == null
-            ? 0.0
-            : chart.left +
-                  chart.width *
-                      (selected.timestamp - points.first.timestamp) /
-                      span;
         final dragStart = dragStartX;
         final dragEnd = dragCurrentX;
         const tooltipWidth = 208.0;
-        var tooltipLeft = selectedX + 12;
+        final tooltipHeight = power ? 88.0 : 112.0;
+        final pointer = pointerPosition;
+        var tooltipLeft = (pointer?.dx ?? 0) + 14;
         if (tooltipLeft + tooltipWidth > size.width) {
-          tooltipLeft = selectedX - tooltipWidth - 12;
+          tooltipLeft = (pointer?.dx ?? 0) - tooltipWidth - 14;
         }
         tooltipLeft = tooltipLeft
             .clamp(4.0, math.max(4.0, size.width - tooltipWidth - 4))
             .toDouble();
+        var tooltipTop = (pointer?.dy ?? 0) + 14;
+        if (tooltipTop + tooltipHeight > size.height) {
+          tooltipTop = (pointer?.dy ?? 0) - tooltipHeight - 14;
+        }
+        tooltipTop = tooltipTop
+            .clamp(4.0, math.max(4.0, size.height - tooltipHeight - 4))
+            .toDouble();
         return MouseRegion(
+          key: ValueKey(
+            power
+                ? 'temperature-history-power-chart'
+                : 'temperature-history-temperature-chart',
+          ),
           cursor: SystemMouseCursors.precise,
           onHover: (event) => _selectAt(event.localPosition, size, points),
-          onExit: (_) => _clearSelection(),
           child: Stack(
             children: [
               GestureDetector(
@@ -1751,17 +3680,31 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
                 onDoubleTap: _resetZoom,
                 child: Stack(
                   children: [
-                    CustomPaint(
-                      size: size,
-                      painter: _TemperatureHistoryPainter(
-                        points: points,
-                        gapThreshold: widget.gapThreshold,
-                        cpuColor: widget.cpuColor,
-                        gpuColor: widget.gpuColor,
-                        fanColor: widget.fanColor,
-                        gridColor: widget.gridColor,
-                        labelColor: widget.labelColor,
-                        selectedIndex: selectedIndex,
+                    RepaintBoundary(
+                      child: CustomPaint(
+                        key: ValueKey(
+                          power
+                              ? 'temperature-history-power-paint'
+                              : 'temperature-history-paint',
+                        ),
+                        size: size,
+                        painter: _TemperatureHistoryPainter(
+                          points: points,
+                          gapThreshold: widget.gapThreshold,
+                          kind: power
+                              ? _HistoryPlotKind.power
+                              : _HistoryPlotKind.temperature,
+                          cpuColor: power
+                              ? widget.cpuPowerColor
+                              : widget.cpuColor,
+                          gpuColor: power
+                              ? widget.gpuPowerColor
+                              : widget.gpuColor,
+                          fanColor: widget.fanColor,
+                          gridColor: widget.gridColor,
+                          labelColor: widget.labelColor,
+                          selectedIndex: selectedIndex,
+                        ),
                       ),
                     ),
                     if (dragStart != null && dragEnd != null)
@@ -1773,37 +3716,38 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
                         child: IgnorePointer(
                           child: DecoratedBox(
                             decoration: BoxDecoration(
-                              color: colors.primary.withAlpha(38),
-                              border: Border.all(
-                                color: colors.primary.withAlpha(120),
-                              ),
+                              color: accent.withAlpha(38),
+                              border: Border.all(color: accent.withAlpha(120)),
                             ),
                           ),
                         ),
                       ),
                     if (selected != null)
-                      Positioned(
+                      AnimatedPositioned(
+                        key: ValueKey(
+                          power
+                              ? 'temperature-history-power-tooltip-position'
+                              : 'temperature-history-tooltip-position',
+                        ),
+                        duration: const Duration(milliseconds: 90),
+                        curve: Curves.easeOutCubic,
                         left: tooltipLeft,
-                        top: chart.top + 8,
+                        top: tooltipTop,
                         width: tooltipWidth,
                         child: IgnorePointer(
-                          child: _historyTooltip(context, selected),
+                          child: _historyTooltip(context, selected, power),
                         ),
                       ),
                   ],
                 ),
               ),
-              if (zoomDomain != null)
+              if (zoomDomain != null && !power)
                 Positioned(
                   top: chart.top + 4,
                   right: size.width - chart.right + 4,
-                  child: TextButton(
+                  child: fluent.Button(
                     key: const ValueKey('temperature-history-reset-zoom'),
                     onPressed: _resetZoom,
-                    style: TextButton.styleFrom(
-                      backgroundColor: colors.surfaceContainerHighest,
-                      visualDensity: VisualDensity.compact,
-                    ),
                     child: const Text('重置缩放'),
                   ),
                 ),
@@ -1811,33 +3755,44 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
           ),
         );
       },
-    );
-  }
+    ),
+  );
 
-  Widget _historyTooltip(BuildContext context, TemperatureHistoryPoint point) {
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      elevation: 6,
-      color: colors.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              _historyDateTime(point.timestamp),
-              style: const TextStyle(fontWeight: FontWeight.w600),
+  Widget _historyTooltip(
+    BuildContext context,
+    TemperatureHistoryPoint point,
+    bool power,
+  ) {
+    final theme = fluent.FluentTheme.of(context);
+    return fluent.FlyoutContent(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _historyDateTime(point.timestamp),
+            style: theme.typography.bodyStrong,
+          ),
+          if (!power && point.cpuTemp > 0)
+            _tooltipRow(widget.cpuColor, 'CPU', '${point.cpuTemp} °C'),
+          if (!power && point.gpuTemp > 0)
+            _tooltipRow(widget.gpuColor, 'GPU', '${point.gpuTemp} °C'),
+          if (!power && point.fanRpm > 0)
+            _tooltipRow(widget.fanColor, '散热器', '${point.fanRpm} RPM'),
+          if (power && point.cpuPower > 0)
+            _tooltipRow(
+              widget.cpuPowerColor,
+              'CPU',
+              '${point.cpuPower.toStringAsFixed(1)} W',
             ),
-            if (point.cpuTemp > 0)
-              _tooltipRow(widget.cpuColor, 'CPU', '${point.cpuTemp} °C'),
-            if (point.gpuTemp > 0)
-              _tooltipRow(widget.gpuColor, 'GPU', '${point.gpuTemp} °C'),
-            if (point.fanRpm > 0)
-              _tooltipRow(widget.fanColor, '散热器', '${point.fanRpm} RPM'),
-          ],
-        ),
+          if (power && point.gpuPower > 0)
+            _tooltipRow(
+              widget.gpuPowerColor,
+              'GPU',
+              '${point.gpuPower.toStringAsFixed(1)} W',
+            ),
+        ],
       ),
     );
   }
@@ -1854,16 +3809,22 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
         const SizedBox(width: 7),
         Text(label),
         const Spacer(),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+        Text(
+          value,
+          style: fluent.FluentTheme.of(context).typography.bodyStrong,
+        ),
       ],
     ),
   );
 }
 
+enum _HistoryPlotKind { temperature, power }
+
 class _TemperatureHistoryPainter extends CustomPainter {
   const _TemperatureHistoryPainter({
     required this.points,
     required this.gapThreshold,
+    required this.kind,
     required this.cpuColor,
     required this.gpuColor,
     required this.fanColor,
@@ -1874,6 +3835,7 @@ class _TemperatureHistoryPainter extends CustomPainter {
 
   final List<TemperatureHistoryPoint> points;
   final int gapThreshold;
+  final _HistoryPlotKind kind;
   final Color cpuColor;
   final Color gpuColor;
   final Color fanColor;
@@ -1885,21 +3847,36 @@ class _TemperatureHistoryPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final chart = _temperatureHistoryChartRect(size);
     if (chart.width <= 0 || chart.height <= 0 || points.length < 2) return;
-    final temperatures = [
-      for (final point in points)
-        if (point.cpuTemp > 0) point.cpuTemp,
-      for (final point in points)
-        if (point.gpuTemp > 0) point.gpuTemp,
-    ];
-    if (temperatures.isEmpty) return;
-    final tempMin = math.max(0, temperatures.reduce(math.min) - 5).toDouble();
-    var tempMax = (temperatures.reduce(math.max) + 5).toDouble();
-    if (tempMax - tempMin < 10) tempMax = tempMin + 10;
+    final values = kind == _HistoryPlotKind.temperature
+        ? <double>[
+            for (final point in points)
+              if (point.cpuTemp > 0) point.cpuTemp.toDouble(),
+            for (final point in points)
+              if (point.gpuTemp > 0) point.gpuTemp.toDouble(),
+          ]
+        : <double>[
+            for (final point in points)
+              if (point.cpuPower > 0) point.cpuPower,
+            for (final point in points)
+              if (point.gpuPower > 0) point.gpuPower,
+          ];
+    if (values.isEmpty) return;
+    final minimum = values.reduce((left, right) => math.min(left, right));
+    final maximum = values.reduce((left, right) => math.max(left, right));
+    final axisMin = kind == _HistoryPlotKind.temperature
+        ? math.max(0, minimum - 5).toDouble()
+        : 0.0;
+    var axisMax = kind == _HistoryPlotKind.temperature
+        ? maximum + 5
+        : math.max(20, ((maximum + 10) / 10).ceil() * 10).toDouble();
+    if (axisMax - axisMin < 10) axisMax = axisMin + 10;
     final fanPeak = points.fold<int>(
       0,
       (peak, point) => math.max(peak, point.fanRpm),
     );
-    final fanMax = math.max(1000, ((fanPeak + 999) ~/ 1000) * 1000);
+    final secondaryMax = kind == _HistoryPlotKind.temperature
+        ? math.max(1000, ((fanPeak + 999) ~/ 1000) * 1000).toDouble()
+        : axisMax;
     final firstTimestamp = points.first.timestamp;
     final span = math.max(1, points.last.timestamp - firstTimestamp);
     final grid = Paint()
@@ -1913,7 +3890,9 @@ class _TemperatureHistoryPainter extends CustomPainter {
       canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), grid);
       _paintChartLabel(
         canvas,
-        '${(tempMax - (tempMax - tempMin) * fraction).round()}°',
+        kind == _HistoryPlotKind.temperature
+            ? '${(axisMax - (axisMax - axisMin) * fraction).round()}°'
+            : '${(axisMax * (1 - fraction)).round()} W',
         Offset(chart.left - 8, y),
         labelColor,
         alignRight: true,
@@ -1921,7 +3900,9 @@ class _TemperatureHistoryPainter extends CustomPainter {
       );
       _paintChartLabel(
         canvas,
-        '${(fanMax * (1 - fraction)).round()}',
+        kind == _HistoryPlotKind.temperature
+            ? '${(secondaryMax * (1 - fraction)).round()}'
+            : '${(axisMax * (1 - fraction)).round()}',
         Offset(chart.right + 8, y),
         labelColor,
         centerVertically: true,
@@ -1935,20 +3916,23 @@ class _TemperatureHistoryPainter extends CustomPainter {
       );
     }
 
-    Offset position(TemperatureHistoryPoint point, int value, bool rpm) =>
-        Offset(
-          chart.left + chart.width * (point.timestamp - firstTimestamp) / span,
-          chart.bottom -
-              chart.height *
-                  (rpm
-                      ? value / fanMax
-                      : (value - tempMin) / (tempMax - tempMin)),
-        );
+    Offset position(
+      TemperatureHistoryPoint point,
+      double value,
+      bool secondary,
+    ) => Offset(
+      chart.left + chart.width * (point.timestamp - firstTimestamp) / span,
+      chart.bottom -
+          chart.height *
+              (secondary
+                  ? value / secondaryMax
+                  : (value - axisMin) / (axisMax - axisMin)),
+    );
 
     void drawSeries(
-      int Function(TemperatureHistoryPoint point) valueOf,
+      double Function(TemperatureHistoryPoint point) valueOf,
       Color color, {
-      bool rpm = false,
+      bool secondary = false,
     }) {
       final path = Path();
       TemperatureHistoryPoint? previous;
@@ -1961,7 +3945,7 @@ class _TemperatureHistoryPainter extends CustomPainter {
           drawing = false;
         }
         if (value > 0) {
-          final offset = position(point, value, rpm);
+          final offset = position(point, value, secondary);
           if (drawing) {
             path.lineTo(offset.dx, offset.dy);
           } else {
@@ -1980,9 +3964,14 @@ class _TemperatureHistoryPainter extends CustomPainter {
       );
     }
 
-    drawSeries((point) => point.cpuTemp, cpuColor);
-    drawSeries((point) => point.gpuTemp, gpuColor);
-    drawSeries((point) => point.fanRpm, fanColor, rpm: true);
+    if (kind == _HistoryPlotKind.temperature) {
+      drawSeries((point) => point.cpuTemp.toDouble(), cpuColor);
+      drawSeries((point) => point.gpuTemp.toDouble(), gpuColor);
+      drawSeries((point) => point.fanRpm.toDouble(), fanColor, secondary: true);
+    } else {
+      drawSeries((point) => point.cpuPower, cpuColor);
+      drawSeries((point) => point.gpuPower, gpuColor);
+    }
 
     final index = selectedIndex;
     if (index != null && index >= 0 && index < points.length) {
@@ -1996,19 +3985,24 @@ class _TemperatureHistoryPainter extends CustomPainter {
           ..color = labelColor.withAlpha(150)
           ..strokeWidth = 1,
       );
-      void marker(int value, Color color, {bool rpm = false}) {
+      void marker(double value, Color color, {bool secondary = false}) {
         if (value > 0) {
           canvas.drawCircle(
-            position(point, value, rpm),
+            position(point, value, secondary),
             4,
             Paint()..color = color,
           );
         }
       }
 
-      marker(point.cpuTemp, cpuColor);
-      marker(point.gpuTemp, gpuColor);
-      marker(point.fanRpm, fanColor, rpm: true);
+      if (kind == _HistoryPlotKind.temperature) {
+        marker(point.cpuTemp.toDouble(), cpuColor);
+        marker(point.gpuTemp.toDouble(), gpuColor);
+        marker(point.fanRpm.toDouble(), fanColor, secondary: true);
+      } else {
+        marker(point.cpuPower, cpuColor);
+        marker(point.gpuPower, gpuColor);
+      }
     }
   }
 
@@ -2016,6 +4010,7 @@ class _TemperatureHistoryPainter extends CustomPainter {
   bool shouldRepaint(_TemperatureHistoryPainter oldDelegate) =>
       oldDelegate.points != points ||
       oldDelegate.gapThreshold != gapThreshold ||
+      oldDelegate.kind != kind ||
       oldDelegate.cpuColor != cpuColor ||
       oldDelegate.gpuColor != gpuColor ||
       oldDelegate.fanColor != fanColor ||

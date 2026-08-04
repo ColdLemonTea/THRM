@@ -74,6 +74,46 @@ void main() {
     );
   });
 
+  test('learned offset summary matches the legacy four-point rule', () {
+    const curve = [
+      (temperature: 30, rpm: 1000),
+      (temperature: 40, rpm: 1400),
+      (temperature: 50, rpm: 1800),
+      (temperature: 60, rpm: 2200),
+      (temperature: 70, rpm: 2600),
+      (temperature: 80, rpm: 3000),
+    ];
+    expect(
+      app.summarizeLearnedOffsets(curve, [
+        50,
+        -500,
+        400,
+        0,
+        -300,
+        200,
+      ], 'balanced'),
+      const [
+        (index: 1, temperature: 40, rpm: -500),
+        (index: 2, temperature: 50, rpm: 400),
+        (index: 4, temperature: 70, rpm: -300),
+        (index: 5, temperature: 80, rpm: 200),
+      ],
+    );
+    expect(
+      app
+          .summarizeLearnedOffsets(curve, [
+            50,
+            -500,
+            400,
+            0,
+            -300,
+            200,
+          ], 'cooling')
+          .map((item) => item.rpm),
+      [400, 200, 50],
+    );
+  });
+
   test('fan curve profile options ignore malformed entries', () {
     expect(
       app.readFanCurveProfileOptions([
@@ -102,6 +142,68 @@ void main() {
       (temperature: 90, rpm: 3750),
     ]);
     expect(app.syncFanCurveRpmAtIndex(curve, 2, 9999).last.rpm, 4000);
+  });
+
+  test(
+    'fan feature inputs use the same ordering and schedule rules as Core',
+    () {
+      final rpm = app.normalizeManualGearRpmMap({
+        '静音': {'低': 700, '中': 1800, '高': 1600},
+        '标准': {'低': 1200, '中': 5000, '高': 2600},
+      });
+      expect((rpm['静音'] as Map)['低'], 800);
+      expect((rpm['静音'] as Map)['高'], 1800);
+      expect((rpm['标准'] as Map)['低'], 1800);
+      expect((rpm['标准'] as Map)['中'], 4500);
+      expect((rpm['超频'] as Map)['高'], 4500);
+
+      final overnight = <String, dynamic>{
+        'enabled': true,
+        'weekdays': [1],
+        'startTime': '22:00',
+        'endTime': '07:00',
+      };
+      expect(
+        app.scheduleRuleMatchesAt(overnight, DateTime(2026, 8, 3, 23)),
+        isTrue,
+      );
+      expect(
+        app.scheduleRuleMatchesAt(overnight, DateTime(2026, 8, 4, 6, 59)),
+        isTrue,
+      );
+      expect(
+        app.scheduleRuleMatchesAt(overnight, DateTime(2026, 8, 4, 7)),
+        isFalse,
+      );
+    },
+  );
+
+  test('fan feature config updates preserve unknown fields', () async {
+    final client = _RecordingIpcClient();
+    final controller = AppController(client: client)
+      ..config = {
+        'smartControl': {'learning': true, 'future': 42},
+        'unknown': {'preserved': true},
+      };
+    addTearDown(controller.dispose);
+
+    expect(
+      await controller.updateConfig({
+        'smartControl': {'learning': false, 'future': 42},
+      }),
+      isTrue,
+    );
+    expect(client.requests.single.type, 'UpdateConfig');
+    expect((client.requests.single.data as Map)['unknown'], {
+      'preserved': true,
+    });
+    expect((controller.config?['smartControl'] as Map)['future'], 42);
+
+    client.requests.clear();
+    expect(await controller.setManualGear('强劲', '高'), isTrue);
+    expect(client.requests.single.data, {'gear': '强劲', 'level': '高'});
+    expect(controller.config?['manualGear'], '强劲');
+    expect((controller.config?['manualGearLevels'] as Map)['强劲'], '高');
   });
 
   test('temperature history normalizes, replaces, and downsamples points', () {
@@ -167,6 +269,7 @@ void main() {
   testWidgets('desktop shell fits the minimum window', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    final semantics = tester.ensureSemantics();
     final controller = AppController();
     addTearDown(controller.dispose);
 
@@ -178,10 +281,58 @@ void main() {
     expect(find.text('正在自动连接后台服务'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('关于'));
+    final paneToggle = find.byKey(const ValueKey('navigation-pane-toggle'));
+    final pane = find.byKey(const ValueKey('navigation-pane'));
+    final paneElement = tester.element(pane);
+    final compactItemCenters = [
+      for (var index = 0; index < 4; index++)
+        tester.getCenter(find.byKey(ValueKey('navigation-item-$index'))).dy,
+    ];
+    expect(
+      compactItemCenters.first -
+          tester
+              .getCenter(find.byIcon(fluent.WindowsIcons.global_nav_button))
+              .dy,
+      closeTo(compactItemCenters[1] - compactItemCenters.first, 0.1),
+    );
+    expect(tester.getSize(pane).width, 50);
+    for (var index = 0; index < 7; index++) {
+      await tester.tap(paneToggle);
+      await tester.pump();
+      expect(tester.element(pane), same(paneElement));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(tester.getSize(pane).width, greaterThan(50));
+      expect(tester.getSize(pane).width, lessThan(180));
+      for (var item = 0; item < compactItemCenters.length; item++) {
+        expect(
+          tester.getCenter(find.byKey(ValueKey('navigation-item-$item'))).dy,
+          closeTo(compactItemCenters[item], 0.1),
+        );
+      }
+      await tester.pumpAndSettle();
+      expect(tester.element(pane), same(paneElement));
+      expect(tester.getSize(pane).width, index.isEven ? 180 : 50);
+    }
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(pane).width, 180);
+    for (var index = 0; index < compactItemCenters.length; index++) {
+      expect(
+        tester.getCenter(find.byKey(ValueKey('navigation-item-$index'))).dy,
+        closeTo(compactItemCenters[index], 0.1),
+      );
+    }
+    expect(
+      tester
+          .widget<fluent.NavigationView>(find.byType(fluent.NavigationView))
+          .pane
+          ?.indicator,
+      isA<fluent.StickyNavigationIndicator>(),
+    );
+    await tester.tap(find.byIcon(fluent.FluentIcons.info).last);
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Flutter 3 渲染实验'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    semantics.dispose();
   });
 
   testWidgets('app supplies zh-CN locale for consistent CJK fallback', (
@@ -225,6 +376,7 @@ void main() {
 
     expect(find.text('42.5W'), findsOneWidget);
     expect(find.text('80W'), findsOneWidget);
+    expect(find.byIcon(fluent.FluentIcons.lightning_bolt), findsNWidgets(2));
     expect(find.text('PawnIO 读取失败'), findsOneWidget);
     scrollController.jumpTo(scrollController.position.maxScrollExtent);
     await tester.pump();
@@ -241,11 +393,17 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = AppController()
       ..config = {
+        'autoControl': true,
         'fanCurve': [
           {'temperature': 30, 'rpm': 1000},
           {'temperature': 60, 'rpm': 2200},
           {'temperature': 90, 'rpm': 3600},
         ],
+        'smartControl': {
+          'learning': true,
+          'learningBias': 'balanced',
+          'learnedOffsets': [0, 200, 0],
+        },
       }
       ..temperature = {'controlTemp': 65}
       ..temperatureHistory = readTemperatureHistorySnapshot({
@@ -257,59 +415,156 @@ void main() {
             'timestamp': 1700000000000,
             'cpuTemp': 50,
             'gpuTemp': 55,
+            'cpuPower': 35,
+            'gpuPower': 70,
             'fanRpm': 1500,
           },
           {
             'timestamp': 1700000005000,
             'cpuTemp': 54,
             'gpuTemp': 58,
+            'cpuPower': 42,
+            'gpuPower': 78,
             'fanRpm': 1800,
           },
           {
             'timestamp': 1700000010000,
             'cpuTemp': 57,
             'gpuTemp': 61,
+            'cpuPower': 50,
+            'gpuPower': 85,
             'fanRpm': 2100,
           },
         ],
       })
       ..fanData = {'targetRpm': 2400};
+    final scrollController = ScrollController();
     addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      _fluentTestApp(app.ThrmShell(controller: controller)),
+      _fluentTestApp(
+        Scaffold(
+          body: app.FanCurvePage(
+            controller: controller,
+            scrollController: scrollController,
+          ),
+        ),
+      ),
     );
-    await tester.tap(find.text('曲线').first);
-    await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('风扇曲线'), findsOneWidget);
     expect(find.text('3 个控制点 · 当前显示 Core 生效曲线'), findsOneWidget);
     expect(find.text('控温 65°C'), findsOneWidget);
     expect(find.text('目标 2400 RPM'), findsOneWidget);
-    expect(find.text('温度历史'), findsOneWidget);
+    final pointer = TestPointer(7, PointerDeviceKind.mouse);
+    final curveChart = find.byKey(const ValueKey('fan-curve-chart'));
+    await tester.sendEventToBinding(
+      pointer.hover(tester.getCenter(curveChart)),
+    );
+    await tester.pump();
+    expect(find.text('温度：60 °C'), findsOneWidget);
+    expect(find.text('基础曲线'), findsOneWidget);
+    expect(find.text('2200 RPM'), findsOneWidget);
+    expect(find.text('学习曲线'), findsOneWidget);
+    expect(find.text('2400 RPM'), findsOneWidget);
+    expect(
+      tester
+          .widget<AnimatedPositioned>(
+            find.byKey(const ValueKey('fan-curve-tooltip-position')),
+          )
+          .duration,
+      const Duration(milliseconds: 90),
+    );
+    expect(
+      tester
+          .widget<fluent.FlyoutContent>(find.byType(fluent.FlyoutContent))
+          .useAcrylic,
+      isTrue,
+    );
+
+    for (var index = 0; index < 4; index++) {
+      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('硬件历史'), findsOneWidget);
     expect(find.text('3 个采样 · 后台保留 1 小时'), findsOneWidget);
     final historyChart = find.byKey(
       const ValueKey('temperature-history-chart'),
     );
     expect(historyChart, findsOneWidget);
-    await tester.ensureVisible(historyChart);
+    final temperatureChart = find.byKey(
+      const ValueKey('temperature-history-temperature-chart'),
+    );
+    final powerChart = find.byKey(
+      const ValueKey('temperature-history-power-chart'),
+    );
+    expect(temperatureChart, findsOneWidget);
+    expect(powerChart, findsOneWidget);
+    await tester.ensureVisible(temperatureChart);
     await tester.pumpAndSettle();
-    final pointer = TestPointer(7, PointerDeviceKind.mouse);
     await tester.sendEventToBinding(
-      pointer.hover(tester.getCenter(historyChart)),
+      pointer.hover(tester.getCenter(temperatureChart)),
     );
     await tester.pump();
     expect(find.text('54 °C'), findsOneWidget);
     expect(find.text('58 °C'), findsOneWidget);
     expect(find.text('1800 RPM'), findsOneWidget);
+    expect(find.text('42.0 W'), findsOneWidget);
+    expect(find.text('78.0 W'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('temperature-history-tooltip-position')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('temperature-history-power-tooltip-position')),
+      findsOneWidget,
+    );
+    expect(find.byType(fluent.FlyoutContent), findsNWidgets(2));
+    expect(
+      tester
+          .widgetList<fluent.FlyoutContent>(find.byType(fluent.FlyoutContent))
+          .every((flyout) => flyout.useAcrylic),
+      isTrue,
+    );
 
-    final chartRect = tester.getRect(historyChart);
+    await tester.ensureVisible(powerChart);
+    await tester.pumpAndSettle();
+    final powerRect = tester.getRect(powerChart);
+    await tester.sendEventToBinding(
+      pointer.hover(
+        Offset(powerRect.left + powerRect.width * 0.8, powerRect.center.dy),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('57 °C'), findsOneWidget);
+    expect(find.text('61 °C'), findsOneWidget);
+    expect(find.text('50.0 W'), findsOneWidget);
+    expect(find.text('85.0 W'), findsOneWidget);
+
+    await tester.ensureVisible(temperatureChart);
+    await tester.pumpAndSettle();
+    final chartRect = tester.getRect(temperatureChart);
     await tester.dragFrom(
       Offset(chartRect.left + chartRect.width * 0.5, chartRect.center.dy),
       Offset(chartRect.width * 0.35, 0),
     );
     await tester.pumpAndSettle();
     expect(find.text('重置缩放'), findsOneWidget);
+    await tester.sendEventToBinding(
+      pointer.hover(tester.getCenter(temperatureChart)),
+    );
+    await tester.pump();
+    final historyPaint = find.byKey(
+      const ValueKey('temperature-history-paint'),
+    );
+    final firstPainter = tester.widget<CustomPaint>(historyPaint).painter!;
+    await tester.sendEventToBinding(
+      pointer.hover(tester.getCenter(temperatureChart) + const Offset(1, 0)),
+    );
+    await tester.pump();
+    final nextPainter = tester.widget<CustomPaint>(historyPaint).painter!;
+    expect(nextPainter.shouldRepaint(firstPainter), isFalse);
     await tester.tap(find.text('重置缩放'));
     await tester.pumpAndSettle();
     expect(find.text('重置缩放'), findsNothing);
@@ -324,6 +579,133 @@ void main() {
     await tester.tapAt(chartRect.center);
     await tester.pumpAndSettle();
     expect(find.text('重置缩放'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('remaining curve controls render and update Core config', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1100, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const curve = [
+      {'temperature': 30, 'rpm': 1000},
+      {'temperature': 60, 'rpm': 2200},
+      {'temperature': 90, 'rpm': 3600},
+    ];
+    final client = _RecordingIpcClient();
+    final controller = AppController(client: client)
+      ..connection = CoreConnection.connected
+      ..deviceConnected = true
+      ..deviceStatus = {'model': 'BS2PRO'}
+      ..config = {
+        'autoControl': false,
+        'fanCurve': curve,
+        'fanCurveProfiles': [
+          {'id': 'balanced', 'name': '均衡', 'curve': curve},
+          {'id': 'quiet', 'name': '静音', 'curve': curve},
+        ],
+        'activeFanCurveProfileId': 'balanced',
+        'manualGear': '标准',
+        'manualLevel': '中',
+        'smartControl': {
+          'learning': true,
+          'predictiveBoost': true,
+          'learningBias': 'balanced',
+          'filterTransientSpike': true,
+          'targetTemp': 68,
+          'learnedOffsets': [0, 100, 0],
+          'future': 'preserved',
+        },
+        'speedAvoidance': {
+          'enabled': true,
+          'minRpm': 1900,
+          'maxRpm': 2200,
+          'marginRpm': 100,
+          'emergencyBypassTemp': 80,
+        },
+        'timeCurveSchedule': {
+          'enabled': true,
+          'rules': [
+            {
+              'id': 'night',
+              'name': '夜间',
+              'enabled': true,
+              'weekdays': [0, 1, 2, 3, 4, 5, 6],
+              'startTime': '22:00',
+              'endTime': '07:00',
+              'curveProfileId': 'quiet',
+            },
+          ],
+        },
+        'unknown': {'preserved': true},
+      };
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+    await tester.pumpWidget(
+      _fluentTestApp(
+        Scaffold(
+          body: app.FanCurvePage(
+            controller: controller,
+            scrollController: scrollController,
+          ),
+        ),
+      ),
+    );
+
+    Future<void> scrollTo(Finder finder) async {
+      for (var index = 0; index < 16 && finder.evaluate().isEmpty; index++) {
+        final position = scrollController.position;
+        final next = (position.pixels + 420).clamp(
+          0.0,
+          position.maxScrollExtent,
+        );
+        scrollController.jumpTo(next);
+        await tester.pumpAndSettle();
+      }
+      expect(finder, findsOneWidget);
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+    }
+
+    await scrollTo(find.text('手动挡位'));
+    await tester.tap(find.text('强劲'));
+    await tester.pumpAndSettle();
+    expect(client.requests.single.type, 'SetManualGear');
+    expect(controller.config?['manualGear'], '强劲');
+
+    client.requests.clear();
+    final learningSwitch = find.byKey(const ValueKey('fan-curve-learning'));
+    await scrollTo(learningSwitch);
+    final targetTemperature = find.byKey(
+      const ValueKey('fan-curve-target-temperature'),
+    );
+    await scrollTo(targetTemperature);
+    expect(
+      tester.widget<fluent.NumberBox<int>>(targetTemperature).mode,
+      fluent.SpinButtonPlacementMode.none,
+    );
+    await scrollTo(learningSwitch);
+    await tester.tap(learningSwitch);
+    await tester.pumpAndSettle();
+    expect(client.requests.single.type, 'UpdateConfig');
+    final sentConfig = client.requests.single.data as Map;
+    expect((sentConfig['smartControl'] as Map)['learning'], isFalse);
+    expect((sentConfig['smartControl'] as Map)['future'], 'preserved');
+    expect(sentConfig['unknown'], {'preserved': true});
+
+    client.requests.clear();
+    await scrollTo(find.text('区间起点'));
+    final addRule = find.byKey(const ValueKey('fan-curve-schedule-add'));
+    await scrollTo(addRule);
+    await tester.tap(addRule);
+    await tester.pumpAndSettle();
+    expect(client.requests.single.type, 'UpdateConfig');
+    expect(
+      ((client.requests.single.data as Map)['timeCurveSchedule']
+          as Map)['rules'],
+      hasLength(2),
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -366,8 +748,8 @@ void main() {
     addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
+      _fluentTestApp(
+        Scaffold(
           body: app.FanCurvePage(
             controller: controller,
             scrollController: scrollController,
@@ -375,12 +757,16 @@ void main() {
         ),
       ),
     );
+    for (var index = 0; index < 4; index++) {
+      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+    }
     final enabledSwitch = find.byKey(
       const ValueKey('temperature-history-enabled'),
     );
     await tester.ensureVisible(enabledSwitch);
     await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(enabledSwitch).value, isTrue);
+    expect(tester.widget<fluent.ToggleSwitch>(enabledSwitch).checked, isTrue);
 
     await tester.tap(enabledSwitch);
     await tester.pumpAndSettle();
@@ -421,6 +807,7 @@ void main() {
     ]);
     expect(client.requests.first.data, {'value': 3});
     expect(controller.temperatureHistory.retentionHours, 3);
+    expect(find.byType(SnackBar), findsNothing);
   });
 
   testWidgets('curve edits can be discarded and low RPM saves are confirmed', (
@@ -444,8 +831,8 @@ void main() {
     addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
+      _fluentTestApp(
+        Scaffold(
           body: app.FanCurvePage(
             controller: controller,
             scrollController: scrollController,
@@ -527,8 +914,8 @@ void main() {
     addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
+      _fluentTestApp(
+        Scaffold(
           body: app.FanCurvePage(
             controller: controller,
             scrollController: scrollController,
@@ -543,6 +930,7 @@ void main() {
       find.byKey(const ValueKey('fan-curve-save')),
     );
     expect(selectorRect.center.dy, closeTo(saveRect.center.dy, 0.1));
+    expect(selectorRect.height, closeTo(saveRect.height, 0.1));
 
     await tester.drag(
       find.byKey(const ValueKey('fan-curve-point-0')),
@@ -613,8 +1001,8 @@ void main() {
     addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
+      _fluentTestApp(
+        Scaffold(
           body: app.FanCurvePage(
             controller: controller,
             scrollController: scrollController,
@@ -745,8 +1133,8 @@ void main() {
     addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
+      _fluentTestApp(
+        Scaffold(
           body: app.FanCurvePage(
             controller: controller,
             scrollController: scrollController,
