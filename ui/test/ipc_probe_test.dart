@@ -329,6 +329,120 @@ void main() {
     expect(find.textContaining('有未保存修改'), findsNothing);
   });
 
+  testWidgets('profile menu creates, renames, and deletes a profile', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const balancedCurve = [
+      {'temperature': 30, 'rpm': 1500},
+      {'temperature': 60, 'rpm': 2200},
+      {'temperature': 90, 'rpm': 3600},
+    ];
+    const quietCurve = [
+      {'temperature': 30, 'rpm': 1000},
+      {'temperature': 60, 'rpm': 1800},
+      {'temperature': 90, 'rpm': 3200},
+    ];
+    final responses = <String, Object?>{
+      'SaveFanCurveProfile': {
+        'id': 'gaming',
+        'name': '游戏',
+        'curve': balancedCurve,
+      },
+      'DeleteFanCurveProfile': true,
+    };
+    final client = _RecordingIpcClient(responses);
+    final controller = AppController(client: client)
+      ..connection = CoreConnection.connected
+      ..config = {
+        'fanCurve': balancedCurve,
+        'fanCurveProfiles': [
+          {
+            'id': 'balanced',
+            'name': '均衡',
+            'curve': balancedCurve,
+            'future': 'preserved',
+          },
+          {'id': 'quiet', 'name': '静音', 'curve': quietCurve},
+        ],
+        'activeFanCurveProfileId': 'balanced',
+        'unknown': {'preserved': true},
+      };
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.FanCurvePage(
+            controller: controller,
+            scrollController: scrollController,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('fan-curve-profile-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('新建方案'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('fan-curve-profile-name-input')),
+      '游戏',
+    );
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+    expect(client.requests.single.type, 'SaveFanCurveProfile');
+    expect(client.requests.single.data, {
+      'id': '',
+      'name': '游戏',
+      'curve': balancedCurve,
+      'setActive': true,
+    });
+    expect(controller.config?['activeFanCurveProfileId'], 'gaming');
+
+    client.requests.clear();
+    responses['SaveFanCurveProfile'] = {
+      'id': 'gaming',
+      'name': '性能',
+      'curve': balancedCurve,
+    };
+    await tester.tap(find.byKey(const ValueKey('fan-curve-profile-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重命名'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('fan-curve-profile-name-input')),
+      '性能',
+    );
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+    expect(client.requests.single.type, 'SaveFanCurveProfile');
+    expect((client.requests.single.data as Map)['id'], 'gaming');
+    expect((client.requests.single.data as Map)['setActive'], isFalse);
+    expect(
+      ((controller.config?['fanCurveProfiles'] as List).first as Map)['future'],
+      'preserved',
+    );
+    expect(find.text('性能'), findsOneWidget);
+
+    client.requests.clear();
+    await tester.tap(find.byKey(const ValueKey('fan-curve-profile-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除方案'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除曲线方案？'), findsOneWidget);
+    await tester.tap(find.text('删除').last);
+    await tester.pumpAndSettle();
+    expect(client.requests.single.type, 'DeleteFanCurveProfile');
+    expect(client.requests.single.data, {'id': 'gaming'});
+    expect(controller.config?['activeFanCurveProfileId'], 'quiet');
+    expect(controller.config?['fanCurve'], quietCurve);
+    expect(controller.config?['unknown'], {'preserved': true});
+  });
+
   testWidgets('mouse wheel scrolling animates and accumulates ticks', (
     tester,
   ) async {
@@ -465,6 +579,40 @@ void main() {
           final switchedConfig =
               await probe.request('GetConfig') as Map<String, dynamic>;
           expect(switchedConfig['activeFanCurveProfileId'], 'quiet');
+          expect(
+            await controller.saveFanCurveProfile(
+              id: '',
+              name: '游戏',
+              curve: curve,
+              setActive: true,
+            ),
+            isTrue,
+          );
+          final createdId =
+              controller.config?['activeFanCurveProfileId'] as String;
+          expect(createdId, startsWith('fixture-'));
+          expect(
+            await controller.saveFanCurveProfile(
+              id: createdId,
+              name: '性能',
+              curve: curve,
+              setActive: false,
+            ),
+            isTrue,
+          );
+          final profiles = controller.config?['fanCurveProfiles'] as List;
+          expect(
+            (profiles.cast<Map>().singleWhere(
+              (profile) => profile['id'] == createdId,
+            ))['name'],
+            '性能',
+          );
+          expect(await controller.deleteFanCurveProfile(createdId), isTrue);
+          expect(controller.config?['activeFanCurveProfileId'], 'quiet');
+          expect(controller.config?['unknown'], {'preserved': true});
+          final managedConfig =
+              await probe.request('GetConfig') as Map<String, dynamic>;
+          expect(managedConfig['activeFanCurveProfileId'], 'quiet');
         } finally {
           controller.dispose();
         }

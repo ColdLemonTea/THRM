@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TIANLI0/THRM/internal/curveprofiles"
 	"github.com/TIANLI0/THRM/internal/ipc"
 	"github.com/TIANLI0/THRM/internal/types"
 )
@@ -26,6 +27,7 @@ func main() {
 		{Temperature: 90, RPM: 3600},
 	}
 	activeProfileID := "balanced"
+	nextProfileID := 1
 	fanCurveProfiles := []types.FanCurveProfile{
 		{ID: "balanced", Name: "均衡", Curve: append([]types.FanCurvePoint(nil), fanCurve...)},
 		{ID: "quiet", Name: "静音", Curve: []types.FanCurvePoint{
@@ -88,6 +90,58 @@ func main() {
 				}
 			}
 			return ipc.Response{Success: false, Error: "profile not found"}
+		case ipc.ReqSaveFanCurveProfile:
+			var data ipc.SaveFanCurveProfileParams
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			index := -1
+			for candidate := range fanCurveProfiles {
+				if fanCurveProfiles[candidate].ID == data.ID {
+					index = candidate
+					break
+				}
+			}
+			if index < 0 {
+				data.ID = fmt.Sprintf("fixture-%d", nextProfileID)
+				nextProfileID++
+				fanCurveProfiles = append(fanCurveProfiles, types.FanCurveProfile{ID: data.ID})
+				index = len(fanCurveProfiles) - 1
+			}
+			fanCurveProfiles[index].Name = curveprofiles.NormalizeProfileName(data.Name, "新曲线")
+			fanCurveProfiles[index].Curve = append([]types.FanCurvePoint(nil), data.Curve...)
+			if data.SetActive || activeProfileID == data.ID {
+				activeProfileID = data.ID
+				fanCurve = append([]types.FanCurvePoint(nil), data.Curve...)
+			}
+			return response(fanCurveProfiles[index])
+		case ipc.ReqDeleteFanCurveProfile:
+			if len(fanCurveProfiles) <= 1 {
+				return ipc.Response{Success: false, Error: "at least one profile is required"}
+			}
+			var data ipc.DeleteFanCurveProfileParams
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			index := -1
+			for candidate := range fanCurveProfiles {
+				if fanCurveProfiles[candidate].ID == data.ID {
+					index = candidate
+					break
+				}
+			}
+			if index < 0 {
+				return ipc.Response{Success: false, Error: "profile not found"}
+			}
+			fanCurveProfiles = append(fanCurveProfiles[:index], fanCurveProfiles[index+1:]...)
+			if activeProfileID == data.ID {
+				if index >= len(fanCurveProfiles) {
+					index = len(fanCurveProfiles) - 1
+				}
+				activeProfileID = fanCurveProfiles[index].ID
+				fanCurve = append([]types.FanCurvePoint(nil), fanCurveProfiles[index].Curve...)
+			}
+			return response(true)
 		case ipc.ReqGetDeviceStatus:
 			return response(map[string]any{
 				"connected": true,

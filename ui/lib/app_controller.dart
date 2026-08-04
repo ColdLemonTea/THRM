@@ -179,6 +179,70 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<bool> saveFanCurveProfile({
+    required String id,
+    required String name,
+    required List<Map<String, int>> curve,
+    required bool setActive,
+  }) async {
+    if (!client.isConnected || updatingFanCurveProfile) return false;
+    updatingFanCurveProfile = true;
+    error = null;
+    _notify();
+    try {
+      final profile = _jsonMap(
+        await client.request(
+          'SaveFanCurveProfile',
+          data: {
+            'id': id,
+            'name': name,
+            'curve': curve,
+            'setActive': setActive,
+          },
+        ),
+        'SaveFanCurveProfile',
+      );
+      _patchSavedFanCurveProfile(profile, setActive: setActive);
+      return true;
+    } catch (caught) {
+      error = '保存风扇曲线方案失败：$caught';
+      return false;
+    } finally {
+      updatingFanCurveProfile = false;
+      _notify();
+    }
+  }
+
+  Future<bool> deleteFanCurveProfile(String id) async {
+    if (!client.isConnected || updatingFanCurveProfile) return false;
+    updatingFanCurveProfile = true;
+    error = null;
+    _notify();
+    try {
+      await client.request('DeleteFanCurveProfile', data: {'id': id});
+      final profiles = _fanCurveProfileMaps();
+      final index = profiles.indexWhere((profile) => profile['id'] == id);
+      if (index >= 0) {
+        profiles.removeAt(index);
+        final patch = <String, dynamic>{'fanCurveProfiles': profiles};
+        if (config?['activeFanCurveProfileId'] == id && profiles.isNotEmpty) {
+          final next =
+              profiles[index < profiles.length ? index : profiles.length - 1];
+          patch['activeFanCurveProfileId'] = next['id'];
+          patch['fanCurve'] = next['curve'];
+        }
+        config = patchConfig(config, patch);
+      }
+      return true;
+    } catch (caught) {
+      error = '删除风扇曲线方案失败：$caught';
+      return false;
+    } finally {
+      updatingFanCurveProfile = false;
+      _notify();
+    }
+  }
+
   Future<void> _syncSnapshot() async {
     final responses = await Future.wait([
       client.request('GetConfig'),
@@ -230,6 +294,38 @@ class AppController extends ChangeNotifier {
 
   Map<String, dynamic>? _optionalMap(Object? value) =>
       value is Map<String, dynamic> ? Map<String, dynamic>.from(value) : null;
+
+  List<Map<String, dynamic>> _fanCurveProfileMaps() {
+    final raw = config?['fanCurveProfiles'];
+    if (raw is! List) return [];
+    return [
+      for (final profile in raw)
+        if (profile is Map) Map<String, dynamic>.from(profile),
+    ];
+  }
+
+  void _patchSavedFanCurveProfile(
+    Map<String, dynamic> profile, {
+    required bool setActive,
+  }) {
+    final id = profile['id']?.toString() ?? '';
+    final curve = profile['curve'];
+    if (id.isEmpty || curve is! List) {
+      throw const FormatException('SaveFanCurveProfile 返回的方案无效');
+    }
+    final profiles = _fanCurveProfileMaps();
+    final index = profiles.indexWhere((item) => item['id'] == id);
+    if (index < 0) {
+      profiles.add(Map<String, dynamic>.from(profile));
+    } else {
+      profiles[index] = {...profiles[index], ...profile};
+    }
+    config = patchConfig(config, {
+      'fanCurveProfiles': profiles,
+      if (setActive) 'activeFanCurveProfileId': id,
+      if (setActive) 'fanCurve': curve,
+    });
+  }
 
   Future<bool> _launchCore() async {
     final names = Platform.isWindows

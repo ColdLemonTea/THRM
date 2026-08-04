@@ -455,6 +455,8 @@ class FanCurvePage extends StatefulWidget {
 
 enum _PendingCurveAction { discard, save }
 
+enum _ProfileMenuAction { create, rename, delete }
+
 class _FanCurvePageState extends State<FanCurvePage> {
   List<FanCurvePoint> savedCurve = const [];
   List<FanCurvePoint> draftCurve = const [];
@@ -503,33 +505,10 @@ class _FanCurvePageState extends State<FanCurvePage> {
         widget.controller.updatingFanCurveProfile) {
       return false;
     }
-    if (draftCurve.any((point) => point.rpm < 1000)) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          icon: const Icon(Icons.warning_amber_rounded),
-          title: const Text('低转速风险'),
-          content: const Text('曲线中存在低于 1000 RPM 的控制点，风扇可能停转并导致设备过热。确定仍要保存吗？'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('仍然保存'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted || confirmed != true) return false;
-    }
+    if (!await _confirmLowRpm(draftCurve)) return false;
 
     final savingCurve = List<FanCurvePoint>.unmodifiable(draftCurve);
-    final saved = await widget.controller.setFanCurve([
-      for (final point in savingCurve)
-        {'temperature': point.temperature, 'rpm': point.rpm},
-    ]);
+    final saved = await widget.controller.setFanCurve(_curveJson(savingCurve));
     if (!mounted) return false;
     if (saved) {
       setState(() {
@@ -542,6 +521,196 @@ class _FanCurvePageState extends State<FanCurvePage> {
       );
     }
     return saved;
+  }
+
+  List<Map<String, int>> _curveJson(List<FanCurvePoint> curve) => [
+    for (final point in curve)
+      {'temperature': point.temperature, 'rpm': point.rpm},
+  ];
+
+  Future<bool> _confirmLowRpm(List<FanCurvePoint> curve) async {
+    if (!curve.any((point) => point.rpm < 1000)) return true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded),
+        title: const Text('低转速风险'),
+        content: const Text('曲线中存在低于 1000 RPM 的控制点，风扇可能停转并导致设备过热。确定仍要保存吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('仍然保存'),
+          ),
+        ],
+      ),
+    );
+    return mounted && confirmed == true;
+  }
+
+  Future<String?> _promptProfileName({
+    required String title,
+    required String description,
+    required String initialValue,
+    required String fallback,
+  }) async {
+    var input = initialValue;
+    String value() {
+      final trimmed = input.trim();
+      return trimmed.isEmpty ? fallback : trimmed;
+    }
+
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(description),
+            const SizedBox(height: 16),
+            TextFormField(
+              key: const ValueKey('fan-curve-profile-name-input'),
+              initialValue: initialValue,
+              autofocus: true,
+              maxLength: 6,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(labelText: '方案名称'),
+              onChanged: (text) => input = text,
+              onFieldSubmitted: (_) => Navigator.pop(dialogContext, value()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, value()),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _createProfile() async {
+    final name = await _promptProfileName(
+      title: '新建曲线方案',
+      description: '以当前曲线为基础创建并切换到新方案。',
+      initialValue: '',
+      fallback: '新曲线',
+    );
+    if (!mounted || name == null || !await _confirmLowRpm(draftCurve)) return;
+    final curve = List<FanCurvePoint>.unmodifiable(draftCurve);
+    final saved = await widget.controller.saveFanCurveProfile(
+      id: '',
+      name: name,
+      curve: _curveJson(curve),
+      setActive: true,
+    );
+    if (!mounted) return;
+    if (!saved) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(widget.controller.error ?? '新建曲线方案失败')),
+      );
+      return;
+    }
+    final activeCurve = readFanCurve(widget.controller.config?['fanCurve']);
+    setState(() {
+      savedCurve = activeCurve.isEmpty ? curve : activeCurve;
+      draftCurve = savedCurve;
+      dirty = false;
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已新建曲线方案“$name”')));
+  }
+
+  Future<void> _renameProfile(FanCurveProfileOption profile) async {
+    final name = await _promptProfileName(
+      title: '重命名曲线方案',
+      description: '方案名称最多 6 个字符。',
+      initialValue: profile.name,
+      fallback: profile.name,
+    );
+    if (!mounted || name == null || name == profile.name) return;
+    final saved = await widget.controller.saveFanCurveProfile(
+      id: profile.id,
+      name: name,
+      curve: _curveJson(savedCurve),
+      setActive: false,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          saved ? '曲线方案已重命名' : widget.controller.error ?? '重命名曲线方案失败',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteProfile(FanCurveProfileOption profile) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.delete_outline),
+        title: const Text('删除曲线方案？'),
+        content: Text(
+          dirty
+              ? '“${profile.name}”还有未保存修改；删除后这些修改也会丢失。'
+              : '确定删除“${profile.name}”吗？此操作无法撤销。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    final deleted = await widget.controller.deleteFanCurveProfile(profile.id);
+    if (!mounted) return;
+    if (!deleted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(widget.controller.error ?? '删除曲线方案失败')),
+      );
+      return;
+    }
+    final activeCurve = readFanCurve(widget.controller.config?['fanCurve']);
+    setState(() {
+      savedCurve = activeCurve;
+      draftCurve = activeCurve;
+      dirty = false;
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('曲线方案已删除')));
+  }
+
+  Future<void> _handleProfileAction(
+    _ProfileMenuAction action,
+    FanCurveProfileOption? profile,
+  ) async {
+    switch (action) {
+      case _ProfileMenuAction.create:
+        await _createProfile();
+      case _ProfileMenuAction.rename:
+        if (profile != null) await _renameProfile(profile);
+      case _ProfileMenuAction.delete:
+        if (profile != null) await _deleteProfile(profile);
+    }
   }
 
   Future<void> _switchProfile(String? id) async {
@@ -606,12 +775,13 @@ class _FanCurvePageState extends State<FanCurvePage> {
             .controller
             .config?['activeFanCurveProfileId']
             ?.toString();
-        final selectedProfileId =
-            profiles.any((profile) => profile.id == activeProfileId)
-            ? activeProfileId
-            : profiles.isEmpty
+        final selectedProfileIndex = profiles.indexWhere(
+          (profile) => profile.id == activeProfileId,
+        );
+        final selectedProfile = profiles.isEmpty
             ? null
-            : profiles.first.id;
+            : profiles[selectedProfileIndex >= 0 ? selectedProfileIndex : 0];
+        final selectedProfileId = selectedProfile?.id;
         final busy =
             widget.controller.updatingFanCurve ||
             widget.controller.updatingFanCurveProfile;
@@ -668,6 +838,52 @@ class _FanCurvePageState extends State<FanCurvePage> {
                                 : null,
                           ),
                         ),
+                      PopupMenuButton<_ProfileMenuAction>(
+                        key: const ValueKey('fan-curve-profile-menu'),
+                        enabled:
+                            widget.controller.connection ==
+                                CoreConnection.connected &&
+                            !busy,
+                        tooltip: '管理曲线方案',
+                        icon: const Icon(Icons.more_horiz),
+                        onSelected: (action) =>
+                            _handleProfileAction(action, selectedProfile),
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: _ProfileMenuAction.create,
+                            child: Row(
+                              children: [
+                                Icon(Icons.add),
+                                SizedBox(width: 12),
+                                Text('新建方案'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: _ProfileMenuAction.rename,
+                            enabled: selectedProfile != null,
+                            child: const Row(
+                              children: [
+                                Icon(Icons.edit_outlined),
+                                SizedBox(width: 12),
+                                Text('重命名'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: _ProfileMenuAction.delete,
+                            enabled:
+                                selectedProfile != null && profiles.length > 1,
+                            child: const Row(
+                              children: [
+                                Icon(Icons.delete_outline),
+                                SizedBox(width: 12),
+                                Text('删除方案'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                       OutlinedButton.icon(
                         key: const ValueKey('fan-curve-discard'),
                         onPressed: dirty && !busy ? _discard : null,
