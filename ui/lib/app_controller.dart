@@ -62,6 +62,7 @@ class AppController extends ChangeNotifier {
   bool updatingAutoControl = false;
   bool updatingFanCurve = false;
   bool updatingFanCurveProfile = false;
+  bool updatingTemperatureHistory = false;
 
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   bool _started = false;
@@ -280,6 +281,40 @@ class AppController extends ChangeNotifier {
       return false;
     } finally {
       updatingFanCurveProfile = false;
+      _notify();
+    }
+  }
+
+  Future<bool> setTemperatureHistoryEnabled(bool enabled) =>
+      _updateTemperatureHistory('SetTemperatureHistoryEnabled', {
+        'enabled': enabled,
+      }, '设置温度历史记录');
+
+  Future<bool> setTemperatureHistoryRetentionHours(int hours) =>
+      _updateTemperatureHistory('SetTemperatureHistoryRetentionHours', {
+        'value': hours.clamp(1, 24),
+      }, '设置温度历史保留时长');
+
+  Future<bool> _updateTemperatureHistory(
+    String request,
+    Map<String, Object> data,
+    String action,
+  ) async {
+    if (!client.isConnected || updatingTemperatureHistory) return false;
+    updatingTemperatureHistory = true;
+    error = null;
+    _notify();
+    try {
+      await client.request(request, data: data);
+      temperatureHistory = readTemperatureHistorySnapshot(
+        await client.request('GetTemperatureHistory'),
+      );
+      return true;
+    } catch (caught) {
+      error = '$action失败：$caught';
+      return false;
+    } finally {
+      updatingTemperatureHistory = false;
       _notify();
     }
   }

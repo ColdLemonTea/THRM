@@ -764,6 +764,59 @@ class _FanCurvePageState extends State<FanCurvePage> {
     ).showSnackBar(const SnackBar(content: Text('已导入为新曲线方案')));
   }
 
+  Future<void> _setTemperatureHistoryEnabled(bool enabled) async {
+    if (!enabled) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          icon: const Icon(Icons.delete_sweep_outlined),
+          title: const Text('关闭后台温度记录？'),
+          content: const Text('Core 会立即清空已保存的温度历史；重新开启后只会记录新的采样。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('关闭并清空'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true) return;
+    }
+    final saved = await widget.controller.setTemperatureHistoryEnabled(enabled);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          saved
+              ? enabled
+                    ? '后台温度记录已开启'
+                    : '后台温度记录已关闭，历史已清空'
+              : widget.controller.error ?? '设置温度历史记录失败',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _setTemperatureHistoryRetentionHours(int hours) async {
+    final saved = await widget.controller.setTemperatureHistoryRetentionHours(
+      hours,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          saved
+              ? '温度历史保留时长已设为 $hours 小时'
+              : widget.controller.error ?? '设置温度历史保留时长失败',
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleProfileAction(
     _ProfileMenuAction action,
     FanCurveProfileOption? profile,
@@ -1059,6 +1112,11 @@ class _FanCurvePageState extends State<FanCurvePage> {
             const SizedBox(height: 16),
             _TemperatureHistoryCard(
               snapshot: widget.controller.temperatureHistory,
+              busy: widget.controller.updatingTemperatureHistory,
+              controlsEnabled:
+                  widget.controller.connection == CoreConnection.connected,
+              onEnabledChanged: _setTemperatureHistoryEnabled,
+              onRetentionChanged: _setTemperatureHistoryRetentionHours,
             ),
           ],
         );
@@ -1315,9 +1373,19 @@ class FanCurvePainter extends CustomPainter {
 }
 
 class _TemperatureHistoryCard extends StatefulWidget {
-  const _TemperatureHistoryCard({required this.snapshot});
+  const _TemperatureHistoryCard({
+    required this.snapshot,
+    required this.busy,
+    required this.controlsEnabled,
+    required this.onEnabledChanged,
+    required this.onRetentionChanged,
+  });
 
   final TemperatureHistorySnapshot snapshot;
+  final bool busy;
+  final bool controlsEnabled;
+  final ValueChanged<bool> onEnabledChanged;
+  final ValueChanged<int> onRetentionChanged;
 
   @override
   State<_TemperatureHistoryCard> createState() =>
@@ -1361,6 +1429,16 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
     final gpuColor = dark ? const Color(0xff64b5f6) : const Color(0xff1565c0);
     final fanColor = dark ? const Color(0xff81c784) : const Color(0xff2e7d32);
     final snapshot = widget.snapshot;
+    final retentionOptions = {
+      1,
+      2,
+      3,
+      6,
+      12,
+      24,
+      snapshot.retentionHours,
+    }.toList()..sort();
+    final controlsEnabled = widget.controlsEnabled && !widget.busy;
     return Card(
       key: const ValueKey('temperature-history-card'),
       child: Padding(
@@ -1389,6 +1467,20 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
                     ],
                   ),
                 ),
+                if (widget.busy) ...[
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                const Text('后台记录'),
+                Switch(
+                  key: const ValueKey('temperature-history-enabled'),
+                  value: snapshot.enabled,
+                  onChanged: controlsEnabled ? widget.onEnabledChanged : null,
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -1399,6 +1491,32 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
                 _historyLegend(cpuColor, 'CPU 温度'),
                 _historyLegend(gpuColor, 'GPU 温度'),
                 _historyLegend(fanColor, '散热器转速'),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('保留'),
+                    const SizedBox(width: 6),
+                    DropdownButton<int>(
+                      key: const ValueKey('temperature-history-retention'),
+                      value: snapshot.retentionHours,
+                      isDense: true,
+                      items: [
+                        for (final hours in retentionOptions)
+                          DropdownMenuItem(
+                            value: hours,
+                            child: Text('$hours 小时'),
+                          ),
+                      ],
+                      onChanged: controlsEnabled
+                          ? (hours) {
+                              if (hours != null) {
+                                widget.onRetentionChanged(hours);
+                              }
+                            }
+                          : null,
+                    ),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 12),

@@ -37,6 +37,8 @@ func main() {
 		}},
 	}
 	historyStart := time.Now().Add(-25 * time.Second).UnixMilli()
+	historyEnabled := true
+	historyRetentionHours := 1
 	historyPoints := []types.TemperatureHistoryPoint{
 		{Timestamp: historyStart, CPUTemp: 50, GPUTemp: 54, CPUPower: 24, GPUPower: 45, FanRPM: 1500},
 		{Timestamp: historyStart + 5000, CPUTemp: 52, GPUTemp: 56, CPUPower: 28, GPUPower: 52, FanRPM: 1700},
@@ -59,12 +61,13 @@ func main() {
 			return response("pong")
 		case ipc.ReqGetConfig:
 			return response(map[string]any{
-				"autoControl":             autoControl,
-				"fanCurve":                fanCurve,
-				"fanCurveProfiles":        fanCurveProfiles,
-				"activeFanCurveProfileId": activeProfileID,
-				"blob":                    strings.Repeat("x", 16*1024),
-				"unknown":                 map[string]bool{"preserved": true},
+				"autoControl":                      autoControl,
+				"fanCurve":                         fanCurve,
+				"fanCurveProfiles":                 fanCurveProfiles,
+				"activeFanCurveProfileId":          activeProfileID,
+				"temperatureHistoryRetentionHours": historyRetentionHours,
+				"blob":                             strings.Repeat("x", 16*1024),
+				"unknown":                          map[string]bool{"preserved": true},
 			})
 		case ipc.ReqSetAutoControl:
 			var data ipc.SetAutoControlParams
@@ -195,12 +198,33 @@ func main() {
 				},
 			})
 		case ipc.ReqGetTemperatureHistory:
+			points := historyPoints
+			if !historyEnabled {
+				points = nil
+			}
 			return response(types.TemperatureHistoryPayload{
-				Enabled:               true,
+				Enabled:               historyEnabled,
 				SampleIntervalSeconds: 5,
-				RetentionHours:        1,
-				Points:                historyPoints,
+				RetentionHours:        historyRetentionHours,
+				Points:                points,
 			})
+		case ipc.ReqSetTemperatureHistoryEnabled:
+			var data ipc.SetBoolParams
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			historyEnabled = data.Enabled
+			if !historyEnabled {
+				historyPoints = nil
+			}
+			return response(true)
+		case ipc.ReqSetTemperatureHistoryRetentionHours:
+			var data ipc.SetIntParams
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			historyRetentionHours = types.NormalizeTemperatureHistoryRetentionHours(data.Value)
+			return response(true)
 		case ipc.RequestType("RestartProbe"):
 			go func() {
 				time.Sleep(150 * time.Millisecond)

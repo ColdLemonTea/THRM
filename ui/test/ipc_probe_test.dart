@@ -253,6 +253,102 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('temperature history controls refresh Core state', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final responses = <String, Object?>{
+      'SetTemperatureHistoryEnabled': true,
+      'SetTemperatureHistoryRetentionHours': true,
+      'GetTemperatureHistory': {
+        'enabled': false,
+        'sampleIntervalSeconds': 5,
+        'retentionHours': 1,
+        'points': <Object?>[],
+      },
+    };
+    final client = _RecordingIpcClient(responses);
+    final controller = AppController(client: client)
+      ..connection = CoreConnection.connected
+      ..config = {
+        'fanCurve': [
+          {'temperature': 30, 'rpm': 1000},
+          {'temperature': 60, 'rpm': 2200},
+          {'temperature': 90, 'rpm': 3600},
+        ],
+      }
+      ..temperatureHistory = readTemperatureHistorySnapshot({
+        'enabled': true,
+        'sampleIntervalSeconds': 5,
+        'retentionHours': 1,
+        'points': [
+          {'timestamp': 1700000000000, 'cpuTemp': 50, 'fanRpm': 1500},
+          {'timestamp': 1700000005000, 'cpuTemp': 52, 'fanRpm': 1700},
+        ],
+      });
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.FanCurvePage(
+            controller: controller,
+            scrollController: scrollController,
+          ),
+        ),
+      ),
+    );
+    final enabledSwitch = find.byKey(
+      const ValueKey('temperature-history-enabled'),
+    );
+    await tester.ensureVisible(enabledSwitch);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(enabledSwitch).value, isTrue);
+
+    await tester.tap(enabledSwitch);
+    await tester.pumpAndSettle();
+    expect(find.text('关闭后台温度记录？'), findsOneWidget);
+    expect(client.requests, isEmpty);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(client.requests, isEmpty);
+
+    await tester.tap(enabledSwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('关闭并清空'));
+    await tester.pumpAndSettle();
+    expect(client.requests.map((request) => request.type), [
+      'SetTemperatureHistoryEnabled',
+      'GetTemperatureHistory',
+    ]);
+    expect(client.requests.first.data, {'enabled': false});
+    expect(controller.temperatureHistory.enabled, isFalse);
+    expect(controller.temperatureHistory.points, isEmpty);
+
+    client.requests.clear();
+    responses['GetTemperatureHistory'] = {
+      'enabled': false,
+      'sampleIntervalSeconds': 5,
+      'retentionHours': 3,
+      'points': <Object?>[],
+    };
+    await tester.tap(
+      find.byKey(const ValueKey('temperature-history-retention')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('3 小时').last);
+    await tester.pumpAndSettle();
+    expect(client.requests.map((request) => request.type), [
+      'SetTemperatureHistoryRetentionHours',
+      'GetTemperatureHistory',
+    ]);
+    expect(client.requests.first.data, {'value': 3});
+    expect(controller.temperatureHistory.retentionHours, 3);
+  });
+
   testWidgets('curve edits can be discarded and low RPM saves are confirmed', (
     tester,
   ) async {
@@ -813,6 +909,16 @@ void main() {
             importedConfig['activeFanCurveProfileId'],
             controller.config?['activeFanCurveProfileId'],
           );
+          expect(
+            await controller.setTemperatureHistoryRetentionHours(3),
+            isTrue,
+          );
+          expect(controller.temperatureHistory.retentionHours, 3);
+          expect(await controller.setTemperatureHistoryEnabled(false), isTrue);
+          expect(controller.temperatureHistory.enabled, isFalse);
+          expect(controller.temperatureHistory.points, isEmpty);
+          expect(await controller.setTemperatureHistoryEnabled(true), isTrue);
+          expect(controller.temperatureHistory.enabled, isTrue);
         } finally {
           controller.dispose();
         }
