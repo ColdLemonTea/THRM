@@ -58,6 +58,7 @@ class AppController extends ChangeNotifier {
   bool deviceConnected = false;
   bool updatingAutoControl = false;
   bool updatingFanCurve = false;
+  bool updatingFanCurveProfile = false;
 
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   bool _started = false;
@@ -146,6 +147,34 @@ class AppController extends ChangeNotifier {
       return false;
     } finally {
       updatingFanCurve = false;
+      _notify();
+    }
+  }
+
+  Future<bool> setActiveFanCurveProfile(String id) async {
+    if (!client.isConnected || updatingFanCurveProfile) return false;
+    updatingFanCurveProfile = true;
+    error = null;
+    _notify();
+    try {
+      final profile = _jsonMap(
+        await client.request('SetActiveFanCurveProfile', data: {'id': id}),
+        'SetActiveFanCurveProfile',
+      );
+      final curve = profile['curve'];
+      if (curve is! List) {
+        throw const FormatException('SetActiveFanCurveProfile 返回的曲线无效');
+      }
+      config = patchConfig(config, {
+        'activeFanCurveProfileId': profile['id']?.toString() ?? id,
+        'fanCurve': curve,
+      });
+      return true;
+    } catch (caught) {
+      error = '切换风扇曲线方案失败：$caught';
+      return false;
+    } finally {
+      updatingFanCurveProfile = false;
       _notify();
     }
   }

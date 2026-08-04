@@ -25,6 +25,15 @@ func main() {
 		{Temperature: 60, RPM: 2200},
 		{Temperature: 90, RPM: 3600},
 	}
+	activeProfileID := "balanced"
+	fanCurveProfiles := []types.FanCurveProfile{
+		{ID: "balanced", Name: "均衡", Curve: append([]types.FanCurvePoint(nil), fanCurve...)},
+		{ID: "quiet", Name: "静音", Curve: []types.FanCurvePoint{
+			{Temperature: 30, RPM: 800},
+			{Temperature: 60, RPM: 1800},
+			{Temperature: 90, RPM: 3200},
+		}},
+	}
 	handler := func(req ipc.Request) ipc.Response {
 		switch req.Type {
 		case ipc.ReqPing:
@@ -39,10 +48,12 @@ func main() {
 			return response("pong")
 		case ipc.ReqGetConfig:
 			return response(map[string]any{
-				"autoControl": autoControl,
-				"fanCurve":    fanCurve,
-				"blob":        strings.Repeat("x", 16*1024),
-				"unknown":     map[string]bool{"preserved": true},
+				"autoControl":             autoControl,
+				"fanCurve":                fanCurve,
+				"fanCurveProfiles":        fanCurveProfiles,
+				"activeFanCurveProfileId": activeProfileID,
+				"blob":                    strings.Repeat("x", 16*1024),
+				"unknown":                 map[string]bool{"preserved": true},
 			})
 		case ipc.ReqSetAutoControl:
 			var data ipc.SetAutoControlParams
@@ -57,7 +68,26 @@ func main() {
 				return ipc.Response{Success: false, Error: err.Error()}
 			}
 			fanCurve = data
+			for index := range fanCurveProfiles {
+				if fanCurveProfiles[index].ID == activeProfileID {
+					fanCurveProfiles[index].Curve = append([]types.FanCurvePoint(nil), data...)
+					break
+				}
+			}
 			return response(true)
+		case ipc.ReqSetActiveFanCurveProfile:
+			var data ipc.SetActiveFanCurveProfileParams
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			for _, profile := range fanCurveProfiles {
+				if profile.ID == data.ID {
+					activeProfileID = profile.ID
+					fanCurve = append([]types.FanCurvePoint(nil), profile.Curve...)
+					return response(profile)
+				}
+			}
+			return ipc.Response{Success: false, Error: "profile not found"}
 		case ipc.ReqGetDeviceStatus:
 			return response(map[string]any{
 				"connected": true,

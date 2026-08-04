@@ -63,6 +63,17 @@ void main() {
     );
   });
 
+  test('fan curve profile options ignore malformed entries', () {
+    expect(
+      app.readFanCurveProfileOptions([
+        {'id': 'balanced', 'name': '均衡'},
+        {'id': '', 'name': '无效'},
+        {'id': 'quiet', 'name': ''},
+      ]),
+      const [(id: 'balanced', name: '均衡'), (id: 'quiet', name: 'quiet')],
+    );
+  });
+
   test('fan curve RPM editing rounds, clamps, and preserves order', () {
     const curve = [
       (temperature: 30, rpm: 1500),
@@ -239,6 +250,85 @@ void main() {
     expect(find.textContaining('有未保存修改'), findsNothing);
   });
 
+  testWidgets('profile switching protects an unsaved curve draft', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const balancedCurve = [
+      {'temperature': 30, 'rpm': 1500},
+      {'temperature': 60, 'rpm': 2200},
+      {'temperature': 90, 'rpm': 3600},
+    ];
+    const quietCurve = [
+      {'temperature': 30, 'rpm': 800},
+      {'temperature': 60, 'rpm': 1800},
+      {'temperature': 90, 'rpm': 3200},
+    ];
+    final client = _RecordingIpcClient({
+      'SetActiveFanCurveProfile': {
+        'id': 'quiet',
+        'name': '静音',
+        'curve': quietCurve,
+      },
+    });
+    final controller = AppController(client: client)
+      ..connection = CoreConnection.connected
+      ..config = {
+        'fanCurve': balancedCurve,
+        'fanCurveProfiles': [
+          {'id': 'balanced', 'name': '均衡', 'curve': balancedCurve},
+          {'id': 'quiet', 'name': '静音', 'curve': quietCurve},
+        ],
+        'activeFanCurveProfileId': 'balanced',
+        'unknown': {'preserved': true},
+      };
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.FanCurvePage(
+            controller: controller,
+            scrollController: scrollController,
+          ),
+        ),
+      ),
+    );
+    final selectorRect = tester.getRect(
+      find.byKey(const ValueKey('fan-curve-profile-selector')),
+    );
+    final saveRect = tester.getRect(
+      find.byKey(const ValueKey('fan-curve-save')),
+    );
+    expect(selectorRect.center.dy, closeTo(saveRect.center.dy, 0.1));
+
+    await tester.drag(
+      find.byKey(const ValueKey('fan-curve-point-0')),
+      const Offset(0, 60),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('有未保存修改'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('fan-curve-profile-selector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('静音').last);
+    await tester.pumpAndSettle();
+    expect(find.text('曲线尚未保存'), findsOneWidget);
+    expect(client.requests, isEmpty);
+
+    await tester.tap(find.text('放弃并切换'));
+    await tester.pumpAndSettle();
+    expect(client.requests.single.type, 'SetActiveFanCurveProfile');
+    expect(client.requests.single.data, {'id': 'quiet'});
+    expect(controller.config?['activeFanCurveProfileId'], 'quiet');
+    expect(controller.config?['fanCurve'], quietCurve);
+    expect(controller.config?['unknown'], {'preserved': true});
+    expect(find.textContaining('有未保存修改'), findsNothing);
+  });
+
   testWidgets('mouse wheel scrolling animates and accumulates ticks', (
     tester,
   ) async {
@@ -365,6 +455,16 @@ void main() {
           final fixtureConfig =
               await probe.request('GetConfig') as Map<String, dynamic>;
           expect(fixtureConfig['fanCurve'], curve);
+          expect(await controller.setActiveFanCurveProfile('quiet'), isTrue);
+          expect(controller.config?['activeFanCurveProfileId'], 'quiet');
+          expect(
+            ((controller.config?['fanCurve'] as List).first as Map)['rpm'],
+            800,
+          );
+          expect(controller.config?['unknown'], {'preserved': true});
+          final switchedConfig =
+              await probe.request('GetConfig') as Map<String, dynamic>;
+          expect(switchedConfig['activeFanCurveProfileId'], 'quiet');
         } finally {
           controller.dispose();
         }
@@ -394,8 +494,9 @@ void main() {
 }
 
 class _RecordingIpcClient extends IpcClient {
-  _RecordingIpcClient() : super(endpoint: 'test');
+  _RecordingIpcClient([this.responses = const {}]) : super(endpoint: 'test');
 
+  final Map<String, Object?> responses;
   final requests = <({String type, Object? data})>[];
 
   @override
@@ -404,6 +505,6 @@ class _RecordingIpcClient extends IpcClient {
   @override
   Future<Object?> request(String type, {Object? data}) async {
     requests.add((type: type, data: data));
-    return true;
+    return responses[type] ?? true;
   }
 }

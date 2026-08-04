@@ -59,6 +59,7 @@ class _ThrmAppState extends State<ThrmApp> {
 enum ThrmPage { status, curve, control, about }
 
 typedef FanCurvePoint = ({int temperature, int rpm});
+typedef FanCurveProfileOption = ({String id, String name});
 
 List<FanCurvePoint> readFanCurve(Object? raw) {
   if (raw is! List || raw.length < 2) return const [];
@@ -83,6 +84,19 @@ List<FanCurvePoint> readFanCurve(Object? raw) {
     points.add((temperature: temperature, rpm: rpm));
   }
   return List.unmodifiable(points);
+}
+
+List<FanCurveProfileOption> readFanCurveProfileOptions(Object? raw) {
+  if (raw is! List) return const [];
+  final profiles = <FanCurveProfileOption>[];
+  for (final item in raw) {
+    if (item is! Map) continue;
+    final id = item['id']?.toString().trim() ?? '';
+    if (id.isEmpty) continue;
+    final name = item['name']?.toString().trim() ?? '';
+    profiles.add((id: id, name: name.isEmpty ? id : name));
+  }
+  return List.unmodifiable(profiles);
 }
 
 List<FanCurvePoint> syncFanCurveRpmAtIndex(
@@ -439,6 +453,8 @@ class FanCurvePage extends StatefulWidget {
   State<FanCurvePage> createState() => _FanCurvePageState();
 }
 
+enum _PendingCurveAction { discard, save }
+
 class _FanCurvePageState extends State<FanCurvePage> {
   List<FanCurvePoint> savedCurve = const [];
   List<FanCurvePoint> draftCurve = const [];
@@ -458,7 +474,11 @@ class _FanCurvePageState extends State<FanCurvePage> {
   }
 
   void _dragBy(int index, double rpmDelta) {
-    if (dragIndex != index || widget.controller.updatingFanCurve) return;
+    if (dragIndex != index ||
+        widget.controller.updatingFanCurve ||
+        widget.controller.updatingFanCurveProfile) {
+      return;
+    }
     dragRpm = (dragRpm + rpmDelta).clamp(0, 4000).toDouble();
     final next = syncFanCurveRpmAtIndex(draftCurve, index, dragRpm);
     if (identical(next, draftCurve)) return;
@@ -477,8 +497,12 @@ class _FanCurvePageState extends State<FanCurvePage> {
     });
   }
 
-  Future<void> _save() async {
-    if (!dirty || widget.controller.updatingFanCurve) return;
+  Future<bool> _save() async {
+    if (!dirty ||
+        widget.controller.updatingFanCurve ||
+        widget.controller.updatingFanCurveProfile) {
+      return false;
+    }
     if (draftCurve.any((point) => point.rpm < 1000)) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -498,7 +522,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
           ],
         ),
       );
-      if (!mounted || confirmed != true) return;
+      if (!mounted || confirmed != true) return false;
     }
 
     final savingCurve = List<FanCurvePoint>.unmodifiable(draftCurve);
@@ -506,7 +530,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
       for (final point in savingCurve)
         {'temperature': point.temperature, 'rpm': point.rpm},
     ]);
-    if (!mounted) return;
+    if (!mounted) return false;
     if (saved) {
       setState(() {
         savedCurve = savingCurve;
@@ -517,6 +541,55 @@ class _FanCurvePageState extends State<FanCurvePage> {
         SnackBar(content: Text(widget.controller.error ?? 'Core 当前不可用，曲线未保存')),
       );
     }
+    return saved;
+  }
+
+  Future<void> _switchProfile(String? id) async {
+    final activeId = widget.controller.config?['activeFanCurveProfileId']
+        ?.toString();
+    if (id == null ||
+        id == activeId ||
+        widget.controller.updatingFanCurve ||
+        widget.controller.updatingFanCurveProfile) {
+      return;
+    }
+
+    if (dirty) {
+      final action = await showDialog<_PendingCurveAction>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('曲线尚未保存'),
+          content: const Text('切换方案前，要保存当前曲线的修改吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            OutlinedButton(
+              onPressed: () =>
+                  Navigator.pop(context, _PendingCurveAction.discard),
+              child: const Text('放弃并切换'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, _PendingCurveAction.save),
+              child: const Text('保存并切换'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || action == null) return;
+      if (action == _PendingCurveAction.save) {
+        if (!await _save()) return;
+      } else {
+        _discard();
+      }
+    }
+
+    final switched = await widget.controller.setActiveFanCurveProfile(id);
+    if (!mounted || switched) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(widget.controller.error ?? '曲线方案切换失败')),
+    );
   }
 
   @override
@@ -526,6 +599,22 @@ class _FanCurvePageState extends State<FanCurvePage> {
       builder: (context, _) {
         _syncExternalCurve(readFanCurve(widget.controller.config?['fanCurve']));
         final points = draftCurve;
+        final profiles = readFanCurveProfileOptions(
+          widget.controller.config?['fanCurveProfiles'],
+        );
+        final activeProfileId = widget
+            .controller
+            .config?['activeFanCurveProfileId']
+            ?.toString();
+        final selectedProfileId =
+            profiles.any((profile) => profile.id == activeProfileId)
+            ? activeProfileId
+            : profiles.isEmpty
+            ? null
+            : profiles.first.id;
+        final busy =
+            widget.controller.updatingFanCurve ||
+            widget.controller.updatingFanCurveProfile;
         final temperature = widget.controller.temperature?['controlTemp'] is num
             ? (widget.controller.temperature!['controlTemp'] as num).toDouble()
             : widget.controller.temperature?['maxTemp'] is num
@@ -555,26 +644,47 @@ class _FanCurvePageState extends State<FanCurvePage> {
                 if (points.isNotEmpty)
                   Wrap(
                     spacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
+                      if (profiles.isNotEmpty)
+                        Semantics(
+                          label: '当前风扇曲线方案',
+                          child: DropdownButton<String>(
+                            key: const ValueKey('fan-curve-profile-selector'),
+                            value: selectedProfileId,
+                            items: [
+                              for (final profile in profiles)
+                                DropdownMenuItem(
+                                  value: profile.id,
+                                  child: Text(profile.name),
+                                ),
+                            ],
+                            onChanged:
+                                widget.controller.connection ==
+                                        CoreConnection.connected &&
+                                    profiles.length > 1 &&
+                                    !busy
+                                ? _switchProfile
+                                : null,
+                          ),
+                        ),
                       OutlinedButton.icon(
-                        onPressed: dirty && !widget.controller.updatingFanCurve
-                            ? _discard
-                            : null,
+                        key: const ValueKey('fan-curve-discard'),
+                        onPressed: dirty && !busy ? _discard : null,
                         icon: const Icon(Icons.undo),
                         label: const Text('放弃修改'),
                       ),
                       FilledButton.icon(
+                        key: const ValueKey('fan-curve-save'),
                         onPressed:
                             dirty &&
                                 widget.controller.connection ==
                                     CoreConnection.connected &&
-                                !widget.controller.updatingFanCurve
+                                !busy
                             ? _save
                             : null,
                         icon: const Icon(Icons.save_outlined),
-                        label: Text(
-                          widget.controller.updatingFanCurve ? '保存中…' : '保存',
-                        ),
+                        label: Text(busy ? '处理中…' : '保存'),
                       ),
                     ],
                   ),
@@ -628,7 +738,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
                               markerColor: colors.tertiary,
                               gridColor: colors.outlineVariant,
                               labelColor: colors.onSurfaceVariant,
-                              editable: !widget.controller.updatingFanCurve,
+                              editable: !busy,
                               onDragStart: _startDrag,
                               onDragUpdate: _dragBy,
                               onDragEnd: _endDrag,
