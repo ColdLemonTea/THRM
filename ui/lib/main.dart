@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import 'app_controller.dart';
 import 'smooth_scroll.dart';
+import 'temperature_history.dart';
 
 void main() => runApp(const ThrmApp());
 
@@ -1055,6 +1056,10 @@ class _FanCurvePageState extends State<FanCurvePage> {
                   ),
                 ),
               ),
+            const SizedBox(height: 16),
+            _TemperatureHistoryCard(
+              snapshot: widget.controller.temperatureHistory,
+            ),
           ],
         );
       },
@@ -1237,19 +1242,22 @@ class FanCurvePainter extends CustomPainter {
       final y = chart.top + chart.height * fraction;
       canvas.drawLine(Offset(x, chart.top), Offset(x, chart.bottom), grid);
       canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), grid);
-      _label(
+      _paintChartLabel(
         canvas,
         '${(4000 * (1 - fraction)).round()}',
         Offset(chart.left - 8, y),
+        labelColor,
         alignRight: true,
+        centerVertically: true,
       );
       final temperature =
           points.first.temperature +
           (points.last.temperature - points.first.temperature) * fraction;
-      _label(
+      _paintChartLabel(
         canvas,
         '${temperature.round()}°',
         Offset(x, chart.bottom + 8),
+        labelColor,
         centered: true,
       );
     }
@@ -1296,34 +1304,6 @@ class FanCurvePainter extends CustomPainter {
     }
   }
 
-  void _label(
-    Canvas canvas,
-    String text,
-    Offset offset, {
-    bool alignRight = false,
-    bool centered = false,
-  }) {
-    final painter = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(color: labelColor, fontSize: 11),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    painter.paint(
-      canvas,
-      Offset(
-        offset.dx -
-            (alignRight
-                ? painter.width
-                : centered
-                ? painter.width / 2
-                : 0),
-        offset.dy - (alignRight ? painter.height / 2 : 0),
-      ),
-    );
-  }
-
   @override
   bool shouldRepaint(FanCurvePainter oldDelegate) =>
       oldDelegate.points != points ||
@@ -1332,6 +1312,314 @@ class FanCurvePainter extends CustomPainter {
       oldDelegate.markerColor != markerColor ||
       oldDelegate.gridColor != gridColor ||
       oldDelegate.labelColor != labelColor;
+}
+
+class _TemperatureHistoryCard extends StatefulWidget {
+  const _TemperatureHistoryCard({required this.snapshot});
+
+  final TemperatureHistorySnapshot snapshot;
+
+  @override
+  State<_TemperatureHistoryCard> createState() =>
+      _TemperatureHistoryCardState();
+}
+
+class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
+  late List<TemperatureHistoryPoint> points;
+  late int gapThreshold;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPoints();
+  }
+
+  @override
+  void didUpdateWidget(_TemperatureHistoryCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.snapshot.points, widget.snapshot.points) ||
+        oldWidget.snapshot.sampleIntervalSeconds !=
+            widget.snapshot.sampleIntervalSeconds) {
+      _syncPoints();
+    }
+  }
+
+  void _syncPoints() {
+    points = downsampleTemperatureHistory(widget.snapshot.points, 600);
+    gapThreshold = temperatureHistoryGapThreshold(
+      points,
+      widget.snapshot.sampleIntervalSeconds,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    final cpuColor = dark ? const Color(0xffffb74d) : const Color(0xffe65100);
+    final gpuColor = dark ? const Color(0xff64b5f6) : const Color(0xff1565c0);
+    final fanColor = dark ? const Color(0xff81c784) : const Color(0xff2e7d32);
+    final snapshot = widget.snapshot;
+    return Card(
+      key: const ValueKey('temperature-history-card'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.history),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '温度历史',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      Text(
+                        snapshot.enabled
+                            ? '${snapshot.points.length} 个采样 · 后台保留 ${snapshot.retentionHours} 小时'
+                            : '后台记录已关闭',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                _historyLegend(cpuColor, 'CPU 温度'),
+                _historyLegend(gpuColor, 'GPU 温度'),
+                _historyLegend(fanColor, '散热器转速'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (points.length < 2)
+              const SizedBox(
+                height: 160,
+                child: Center(child: Text('等待 Core 记录更多温度采样')),
+              )
+            else
+              Semantics(
+                label:
+                    '温度历史图，${snapshot.points.length} 个采样，包含 CPU、GPU 温度和散热器转速',
+                child: RepaintBoundary(
+                  child: SizedBox(
+                    height: 260,
+                    width: double.infinity,
+                    child: CustomPaint(
+                      key: const ValueKey('temperature-history-chart'),
+                      painter: _TemperatureHistoryPainter(
+                        points: points,
+                        gapThreshold: gapThreshold,
+                        cpuColor: cpuColor,
+                        gpuColor: gpuColor,
+                        fanColor: fanColor,
+                        gridColor: colors.outlineVariant,
+                        labelColor: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _historyLegend(Color color, String label) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 10,
+        height: 3,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(2),
+        ),
+      ),
+      const SizedBox(width: 5),
+      Text(label),
+    ],
+  );
+}
+
+class _TemperatureHistoryPainter extends CustomPainter {
+  const _TemperatureHistoryPainter({
+    required this.points,
+    required this.gapThreshold,
+    required this.cpuColor,
+    required this.gpuColor,
+    required this.fanColor,
+    required this.gridColor,
+    required this.labelColor,
+  });
+
+  final List<TemperatureHistoryPoint> points;
+  final int gapThreshold;
+  final Color cpuColor;
+  final Color gpuColor;
+  final Color fanColor;
+  final Color gridColor;
+  final Color labelColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final chart = Rect.fromLTRB(48, 12, size.width - 52, size.height - 30);
+    if (chart.width <= 0 || chart.height <= 0 || points.length < 2) return;
+    final temperatures = [
+      for (final point in points)
+        if (point.cpuTemp > 0) point.cpuTemp,
+      for (final point in points)
+        if (point.gpuTemp > 0) point.gpuTemp,
+    ];
+    if (temperatures.isEmpty) return;
+    final tempMin = math.max(0, temperatures.reduce(math.min) - 5).toDouble();
+    var tempMax = (temperatures.reduce(math.max) + 5).toDouble();
+    if (tempMax - tempMin < 10) tempMax = tempMin + 10;
+    final fanPeak = points.fold<int>(
+      0,
+      (peak, point) => math.max(peak, point.fanRpm),
+    );
+    final fanMax = math.max(1000, ((fanPeak + 999) ~/ 1000) * 1000);
+    final firstTimestamp = points.first.timestamp;
+    final span = math.max(1, points.last.timestamp - firstTimestamp);
+    final grid = Paint()
+      ..color = gridColor
+      ..strokeWidth = 1;
+    for (var index = 0; index <= 4; index++) {
+      final fraction = index / 4;
+      final x = chart.left + chart.width * fraction;
+      final y = chart.top + chart.height * fraction;
+      canvas.drawLine(Offset(x, chart.top), Offset(x, chart.bottom), grid);
+      canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), grid);
+      _paintChartLabel(
+        canvas,
+        '${(tempMax - (tempMax - tempMin) * fraction).round()}°',
+        Offset(chart.left - 8, y),
+        labelColor,
+        alignRight: true,
+        centerVertically: true,
+      );
+      _paintChartLabel(
+        canvas,
+        '${(fanMax * (1 - fraction)).round()}',
+        Offset(chart.right + 8, y),
+        labelColor,
+        centerVertically: true,
+      );
+      _paintChartLabel(
+        canvas,
+        _historyTime((firstTimestamp + span * fraction).round()),
+        Offset(x, chart.bottom + 8),
+        labelColor,
+        centered: true,
+      );
+    }
+
+    Offset position(TemperatureHistoryPoint point, int value, bool rpm) =>
+        Offset(
+          chart.left + chart.width * (point.timestamp - firstTimestamp) / span,
+          chart.bottom -
+              chart.height *
+                  (rpm
+                      ? value / fanMax
+                      : (value - tempMin) / (tempMax - tempMin)),
+        );
+
+    void drawSeries(
+      int Function(TemperatureHistoryPoint point) valueOf,
+      Color color, {
+      bool rpm = false,
+    }) {
+      final path = Path();
+      TemperatureHistoryPoint? previous;
+      var drawing = false;
+      for (final point in points) {
+        final value = valueOf(point);
+        if (value <= 0 ||
+            (previous != null &&
+                point.timestamp - previous.timestamp > gapThreshold)) {
+          drawing = false;
+        }
+        if (value > 0) {
+          final offset = position(point, value, rpm);
+          if (drawing) {
+            path.lineTo(offset.dx, offset.dy);
+          } else {
+            path.moveTo(offset.dx, offset.dy);
+            drawing = true;
+          }
+        }
+        previous = point;
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color
+          ..strokeWidth = 2
+          ..style = PaintingStyle.stroke,
+      );
+    }
+
+    drawSeries((point) => point.cpuTemp, cpuColor);
+    drawSeries((point) => point.gpuTemp, gpuColor);
+    drawSeries((point) => point.fanRpm, fanColor, rpm: true);
+  }
+
+  @override
+  bool shouldRepaint(_TemperatureHistoryPainter oldDelegate) =>
+      oldDelegate.points != points ||
+      oldDelegate.gapThreshold != gapThreshold ||
+      oldDelegate.cpuColor != cpuColor ||
+      oldDelegate.gpuColor != gpuColor ||
+      oldDelegate.fanColor != fanColor ||
+      oldDelegate.gridColor != gridColor ||
+      oldDelegate.labelColor != labelColor;
+}
+
+String _historyTime(int timestamp) {
+  final time = DateTime.fromMillisecondsSinceEpoch(timestamp);
+  return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+}
+
+void _paintChartLabel(
+  Canvas canvas,
+  String text,
+  Offset offset,
+  Color color, {
+  bool alignRight = false,
+  bool centered = false,
+  bool centerVertically = false,
+}) {
+  final painter = TextPainter(
+    text: TextSpan(
+      text: text,
+      style: TextStyle(color: color, fontSize: 11),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  painter.paint(
+    canvas,
+    Offset(
+      offset.dx -
+          (alignRight
+              ? painter.width
+              : centered
+              ? painter.width / 2
+              : 0),
+      offset.dy - (centerVertically ? painter.height / 2 : 0),
+    ),
+  );
 }
 
 class PlaceholderPage extends StatelessWidget {

@@ -36,6 +36,15 @@ func main() {
 			{Temperature: 90, RPM: 3200},
 		}},
 	}
+	historyStart := time.Now().Add(-25 * time.Second).UnixMilli()
+	historyPoints := []types.TemperatureHistoryPoint{
+		{Timestamp: historyStart, CPUTemp: 50, GPUTemp: 54, CPUPower: 24, GPUPower: 45, FanRPM: 1500},
+		{Timestamp: historyStart + 5000, CPUTemp: 52, GPUTemp: 56, CPUPower: 28, GPUPower: 52, FanRPM: 1700},
+		{Timestamp: historyStart + 10000, CPUTemp: 55, GPUTemp: 59, CPUPower: 32, GPUPower: 60, FanRPM: 1900},
+		{Timestamp: historyStart + 15000, CPUTemp: 58, GPUTemp: 62, CPUPower: 38, GPUPower: 68, FanRPM: 2200},
+		{Timestamp: historyStart + 20000, CPUTemp: 56, GPUTemp: 60, CPUPower: 30, GPUPower: 58, FanRPM: 2100},
+		{Timestamp: historyStart + 25000, CPUTemp: 54, GPUTemp: 58, CPUPower: 26, GPUPower: 50, FanRPM: 1900},
+	}
 	handler := func(req ipc.Request) ipc.Response {
 		switch req.Type {
 		case ipc.ReqPing:
@@ -184,6 +193,13 @@ func main() {
 					"gpuTemp": 60,
 					"maxTemp": 60,
 				},
+			})
+		case ipc.ReqGetTemperatureHistory:
+			return response(types.TemperatureHistoryPayload{
+				Enabled:               true,
+				SampleIntervalSeconds: 5,
+				RetentionHours:        1,
+				Points:                historyPoints,
 			})
 		case ipc.RequestType("RestartProbe"):
 			go func() {

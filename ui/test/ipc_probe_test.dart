@@ -10,6 +10,7 @@ import 'package:thrm_ui/app_controller.dart';
 import 'package:thrm_ui/ipc_probe.dart';
 import 'package:thrm_ui/main.dart' as app;
 import 'package:thrm_ui/smooth_scroll.dart';
+import 'package:thrm_ui/temperature_history.dart';
 
 void main() {
   test('temperature deltas preserve sensor metadata', () {
@@ -94,6 +95,42 @@ void main() {
     expect(app.syncFanCurveRpmAtIndex(curve, 2, 9999).last.rpm, 4000);
   });
 
+  test('temperature history normalizes, replaces, and downsamples points', () {
+    final snapshot = readTemperatureHistorySnapshot({
+      'enabled': true,
+      'sampleIntervalSeconds': 5,
+      'retentionHours': 1,
+      'points': [
+        {'timestamp': 1700000010, 'cpuTemp': 54, 'gpuTemp': 58, 'fanRpm': 1800},
+        {'timestamp': 1700000000, 'cpuTemp': 50, 'gpuTemp': 55, 'fanRpm': 1500},
+        {'timestamp': 0, 'cpuTemp': 99},
+      ],
+    });
+    expect(snapshot.points.map((point) => point.timestamp), [
+      1700000000000,
+      1700000010000,
+    ]);
+    final replaced = appendTemperatureHistoryPoint(snapshot, {
+      'timestamp': 1700000010000,
+      'cpuTemp': 56,
+      'gpuTemp': 60,
+      'fanRpm': 1900,
+    });
+    expect(replaced.points, hasLength(2));
+    expect(replaced.points.last.cpuTemp, 56);
+    final appended = appendTemperatureHistoryPoint(replaced, {
+      'timestamp': 1700000020000,
+      'cpuTemp': 58,
+      'gpuTemp': 62,
+      'fanRpm': 2100,
+    });
+    expect(downsampleTemperatureHistory(appended.points, 2), [
+      appended.points.first,
+      appended.points.last,
+    ]);
+    expect(temperatureHistoryGapThreshold(appended.points, 5), 30000);
+  });
+
   testWidgets('desktop shell fits the minimum window', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -169,6 +206,31 @@ void main() {
         ],
       }
       ..temperature = {'controlTemp': 65}
+      ..temperatureHistory = readTemperatureHistorySnapshot({
+        'enabled': true,
+        'sampleIntervalSeconds': 5,
+        'retentionHours': 1,
+        'points': [
+          {
+            'timestamp': 1700000000000,
+            'cpuTemp': 50,
+            'gpuTemp': 55,
+            'fanRpm': 1500,
+          },
+          {
+            'timestamp': 1700000005000,
+            'cpuTemp': 54,
+            'gpuTemp': 58,
+            'fanRpm': 1800,
+          },
+          {
+            'timestamp': 1700000010000,
+            'cpuTemp': 57,
+            'gpuTemp': 61,
+            'fanRpm': 2100,
+          },
+        ],
+      })
       ..fanData = {'targetRpm': 2400};
     addTearDown(controller.dispose);
 
@@ -182,6 +244,12 @@ void main() {
     expect(find.text('3 个控制点 · 当前显示 Core 生效曲线'), findsOneWidget);
     expect(find.text('控温 65°C'), findsOneWidget);
     expect(find.text('目标 2400 RPM'), findsOneWidget);
+    expect(find.text('温度历史'), findsOneWidget);
+    expect(find.text('3 个采样 · 后台保留 1 小时'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('temperature-history-chart')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -663,6 +731,8 @@ void main() {
           expect(controller.deviceConnected, isTrue);
           expect(controller.deviceStatus?['model'], 'THRM fixture');
           expect(controller.config?['unknown'], {'preserved': true});
+          expect(controller.temperatureHistory.enabled, isTrue);
+          expect(controller.temperatureHistory.points, hasLength(6));
           await controller.setAutoControl(false);
           expect(controller.config?['autoControl'], isFalse);
           expect(controller.config?['unknown'], {'preserved': true});

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'ipc_probe.dart';
+import 'temperature_history.dart';
 
 enum CoreConnection { connecting, connected, waiting }
 
@@ -55,6 +56,8 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic>? deviceStatus;
   Map<String, dynamic>? fanData;
   Map<String, dynamic>? temperature;
+  TemperatureHistorySnapshot temperatureHistory =
+      emptyTemperatureHistorySnapshot;
   bool deviceConnected = false;
   bool updatingAutoControl = false;
   bool updatingFanCurve = false;
@@ -285,6 +288,7 @@ class AppController extends ChangeNotifier {
     final responses = await Future.wait([
       client.request('GetConfig'),
       client.request('GetDeviceStatus'),
+      client.request('GetTemperatureHistory'),
     ]);
     config = _jsonMap(responses[0], 'GetConfig');
     deviceStatus = _jsonMap(responses[1], 'GetDeviceStatus');
@@ -294,6 +298,7 @@ class AppController extends ChangeNotifier {
     if (snapshotTemperature != null) {
       temperature = mergeTemperatureMetadata(temperature, snapshotTemperature);
     }
+    temperatureHistory = readTemperatureHistorySnapshot(responses[2]);
   }
 
   void _handleEvent(Map<String, dynamic> event) {
@@ -309,6 +314,11 @@ class AppController extends ChangeNotifier {
         if (update != null) {
           temperature = mergeTemperatureMetadata(temperature, update);
         }
+      case 'temperature-history-update':
+        temperatureHistory = appendTemperatureHistoryPoint(
+          temperatureHistory,
+          data,
+        );
       case 'device-connected':
         deviceConnected = true;
         final info = _optionalMap(data);
