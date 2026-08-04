@@ -1,0 +1,54 @@
+name: Flutter Linux Rendering Experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/flutter3-ui
+    paths:
+      - '.github/workflows/flutter-linux-experiment.yml'
+      - 'ui/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-profile:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev libstdc++-12-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
+
+      - name: Build Linux profile bundle
+        working-directory: ui
+        run: |
+          flutter pub get
+          flutter build linux --profile
+
+      - name: Package bundle
+        run: |
+          tar -C ui/build/linux/x64/profile -czf THRM-flutter-linux-x64-profile.tar.gz bundle
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: THRM-flutter-linux-x64-profile-${{ github.sha }}
+          path: THRM-flutter-linux-x64-profile.tar.gz
+          if-no-files-found: error
+          retention-days: 7
