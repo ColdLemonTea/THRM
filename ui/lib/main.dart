@@ -1533,17 +1533,15 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
                   child: SizedBox(
                     height: 260,
                     width: double.infinity,
-                    child: CustomPaint(
+                    child: _TemperatureHistoryChart(
                       key: const ValueKey('temperature-history-chart'),
-                      painter: _TemperatureHistoryPainter(
-                        points: points,
-                        gapThreshold: gapThreshold,
-                        cpuColor: cpuColor,
-                        gpuColor: gpuColor,
-                        fanColor: fanColor,
-                        gridColor: colors.outlineVariant,
-                        labelColor: colors.onSurfaceVariant,
-                      ),
+                      points: points,
+                      gapThreshold: gapThreshold,
+                      cpuColor: cpuColor,
+                      gpuColor: gpuColor,
+                      fanColor: fanColor,
+                      gridColor: colors.outlineVariant,
+                      labelColor: colors.onSurfaceVariant,
                     ),
                   ),
                 ),
@@ -1571,8 +1569,11 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
   );
 }
 
-class _TemperatureHistoryPainter extends CustomPainter {
-  const _TemperatureHistoryPainter({
+Rect _temperatureHistoryChartRect(Size size) =>
+    Rect.fromLTRB(48, 12, size.width - 52, size.height - 30);
+
+class _TemperatureHistoryChart extends StatefulWidget {
+  const _TemperatureHistoryChart({
     required this.points,
     required this.gapThreshold,
     required this.cpuColor,
@@ -1580,6 +1581,7 @@ class _TemperatureHistoryPainter extends CustomPainter {
     required this.fanColor,
     required this.gridColor,
     required this.labelColor,
+    super.key,
   });
 
   final List<TemperatureHistoryPoint> points;
@@ -1591,8 +1593,188 @@ class _TemperatureHistoryPainter extends CustomPainter {
   final Color labelColor;
 
   @override
+  State<_TemperatureHistoryChart> createState() =>
+      _TemperatureHistoryChartState();
+}
+
+class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
+  int? selectedIndex;
+
+  @override
+  void didUpdateWidget(_TemperatureHistoryChart oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.points, widget.points) ||
+        (selectedIndex != null && selectedIndex! >= widget.points.length)) {
+      selectedIndex = null;
+    }
+  }
+
+  void _selectAt(Offset position, Size size) {
+    final chart = _temperatureHistoryChartRect(size);
+    int? next;
+    if (position.dx >= chart.left && position.dx <= chart.right) {
+      final first = widget.points.first.timestamp;
+      final span = math.max(1, widget.points.last.timestamp - first);
+      final target = first + span * (position.dx - chart.left) / chart.width;
+      var low = 0;
+      var high = widget.points.length - 1;
+      while (low < high) {
+        final middle = (low + high) ~/ 2;
+        if (widget.points[middle].timestamp < target) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      next = low;
+      if (low > 0 &&
+          (widget.points[low - 1].timestamp - target).abs() <
+              (widget.points[low].timestamp - target).abs()) {
+        next = low - 1;
+      }
+    }
+    if (next != selectedIndex) setState(() => selectedIndex = next);
+  }
+
+  void _clearSelection() {
+    if (selectedIndex != null) setState(() => selectedIndex = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = Size(constraints.maxWidth, constraints.maxHeight);
+        final index = selectedIndex;
+        final selected = index == null ? null : widget.points[index];
+        final chart = _temperatureHistoryChartRect(size);
+        final span = math.max(
+          1,
+          widget.points.last.timestamp - widget.points.first.timestamp,
+        );
+        final selectedX = selected == null
+            ? 0.0
+            : chart.left +
+                  chart.width *
+                      (selected.timestamp - widget.points.first.timestamp) /
+                      span;
+        const tooltipWidth = 208.0;
+        var tooltipLeft = selectedX + 12;
+        if (tooltipLeft + tooltipWidth > size.width) {
+          tooltipLeft = selectedX - tooltipWidth - 12;
+        }
+        tooltipLeft = tooltipLeft
+            .clamp(4.0, math.max(4.0, size.width - tooltipWidth - 4))
+            .toDouble();
+        return MouseRegion(
+          cursor: SystemMouseCursors.precise,
+          onHover: (event) => _selectAt(event.localPosition, size),
+          onExit: (_) => _clearSelection(),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) => _selectAt(details.localPosition, size),
+            child: Stack(
+              children: [
+                CustomPaint(
+                  size: size,
+                  painter: _TemperatureHistoryPainter(
+                    points: widget.points,
+                    gapThreshold: widget.gapThreshold,
+                    cpuColor: widget.cpuColor,
+                    gpuColor: widget.gpuColor,
+                    fanColor: widget.fanColor,
+                    gridColor: widget.gridColor,
+                    labelColor: widget.labelColor,
+                    selectedIndex: selectedIndex,
+                  ),
+                ),
+                if (selected != null)
+                  Positioned(
+                    left: tooltipLeft,
+                    top: chart.top + 8,
+                    width: tooltipWidth,
+                    child: IgnorePointer(
+                      child: _historyTooltip(context, selected),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _historyTooltip(BuildContext context, TemperatureHistoryPoint point) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      elevation: 6,
+      color: colors.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _historyDateTime(point.timestamp),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            if (point.cpuTemp > 0)
+              _tooltipRow(widget.cpuColor, 'CPU', '${point.cpuTemp} °C'),
+            if (point.gpuTemp > 0)
+              _tooltipRow(widget.gpuColor, 'GPU', '${point.gpuTemp} °C'),
+            if (point.fanRpm > 0)
+              _tooltipRow(widget.fanColor, '散热器', '${point.fanRpm} RPM'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tooltipRow(Color color, String label, String value) => Padding(
+    padding: const EdgeInsets.only(top: 4),
+    child: Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 7),
+        Text(label),
+        const Spacer(),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ],
+    ),
+  );
+}
+
+class _TemperatureHistoryPainter extends CustomPainter {
+  const _TemperatureHistoryPainter({
+    required this.points,
+    required this.gapThreshold,
+    required this.cpuColor,
+    required this.gpuColor,
+    required this.fanColor,
+    required this.gridColor,
+    required this.labelColor,
+    required this.selectedIndex,
+  });
+
+  final List<TemperatureHistoryPoint> points;
+  final int gapThreshold;
+  final Color cpuColor;
+  final Color gpuColor;
+  final Color fanColor;
+  final Color gridColor;
+  final Color labelColor;
+  final int? selectedIndex;
+
+  @override
   void paint(Canvas canvas, Size size) {
-    final chart = Rect.fromLTRB(48, 12, size.width - 52, size.height - 30);
+    final chart = _temperatureHistoryChartRect(size);
     if (chart.width <= 0 || chart.height <= 0 || points.length < 2) return;
     final temperatures = [
       for (final point in points)
@@ -1692,6 +1874,33 @@ class _TemperatureHistoryPainter extends CustomPainter {
     drawSeries((point) => point.cpuTemp, cpuColor);
     drawSeries((point) => point.gpuTemp, gpuColor);
     drawSeries((point) => point.fanRpm, fanColor, rpm: true);
+
+    final index = selectedIndex;
+    if (index != null && index >= 0 && index < points.length) {
+      final point = points[index];
+      final x =
+          chart.left + chart.width * (point.timestamp - firstTimestamp) / span;
+      canvas.drawLine(
+        Offset(x, chart.top),
+        Offset(x, chart.bottom),
+        Paint()
+          ..color = labelColor.withAlpha(150)
+          ..strokeWidth = 1,
+      );
+      void marker(int value, Color color, {bool rpm = false}) {
+        if (value > 0) {
+          canvas.drawCircle(
+            position(point, value, rpm),
+            4,
+            Paint()..color = color,
+          );
+        }
+      }
+
+      marker(point.cpuTemp, cpuColor);
+      marker(point.gpuTemp, gpuColor);
+      marker(point.fanRpm, fanColor, rpm: true);
+    }
   }
 
   @override
@@ -1702,12 +1911,18 @@ class _TemperatureHistoryPainter extends CustomPainter {
       oldDelegate.gpuColor != gpuColor ||
       oldDelegate.fanColor != fanColor ||
       oldDelegate.gridColor != gridColor ||
-      oldDelegate.labelColor != labelColor;
+      oldDelegate.labelColor != labelColor ||
+      oldDelegate.selectedIndex != selectedIndex;
 }
 
 String _historyTime(int timestamp) {
   final time = DateTime.fromMillisecondsSinceEpoch(timestamp);
   return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+}
+
+String _historyDateTime(int timestamp) {
+  final time = DateTime.fromMillisecondsSinceEpoch(timestamp);
+  return '${_historyTime(timestamp)}:${time.second.toString().padLeft(2, '0')}';
 }
 
 void _paintChartLabel(

@@ -246,10 +246,20 @@ void main() {
     expect(find.text('目标 2400 RPM'), findsOneWidget);
     expect(find.text('温度历史'), findsOneWidget);
     expect(find.text('3 个采样 · 后台保留 1 小时'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('temperature-history-chart')),
-      findsOneWidget,
+    final historyChart = find.byKey(
+      const ValueKey('temperature-history-chart'),
     );
+    expect(historyChart, findsOneWidget);
+    await tester.ensureVisible(historyChart);
+    await tester.pumpAndSettle();
+    final pointer = TestPointer(7, PointerDeviceKind.mouse);
+    await tester.sendEventToBinding(
+      pointer.hover(tester.getCenter(historyChart)),
+    );
+    await tester.pump();
+    expect(find.text('54 °C'), findsOneWidget);
+    expect(find.text('58 °C'), findsOneWidget);
+    expect(find.text('1800 RPM'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
