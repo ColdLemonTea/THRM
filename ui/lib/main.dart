@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 
+import 'package:fluent_ui/fluent_ui.dart' as fluent;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 
 import 'app_controller.dart';
@@ -10,6 +10,12 @@ import 'smooth_scroll.dart';
 import 'temperature_history.dart';
 
 void main() => runApp(const ThrmApp());
+
+fluent.FluentThemeData _fluentTheme(Brightness brightness) =>
+    fluent.FluentThemeData(
+      brightness: brightness,
+      accentColor: fluent.Colors.blue,
+    );
 
 class ThrmApp extends StatefulWidget {
   const ThrmApp({super.key});
@@ -35,24 +41,16 @@ class _ThrmAppState extends State<ThrmApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return fluent.FluentApp(
       title: 'THRM',
       debugShowCheckedModeBanner: false,
       locale: const Locale('zh', 'CN'),
-      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       supportedLocales: const [Locale('zh', 'CN')],
       themeMode: ThemeMode.system,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff6750a4)),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xffb69df8),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: _fluentTheme(Brightness.light),
+      darkTheme: _fluentTheme(Brightness.dark),
+      builder: (_, child) =>
+          ScaffoldMessenger(child: child ?? const SizedBox.shrink()),
       home: ThrmShell(controller: controller),
     );
   }
@@ -127,17 +125,11 @@ List<FanCurvePoint> syncFanCurveRpmAtIndex(
 }
 
 const _pageLabels = ['状态', '曲线', '控制', '关于'];
-const _pageIcons = [
-  Icons.dashboard_outlined,
-  Icons.show_chart,
-  Icons.tune,
-  Icons.info_outline,
-];
-const _selectedPageIcons = [
-  Icons.dashboard,
-  Icons.show_chart,
-  Icons.tune,
-  Icons.info,
+const _fluentPageIcons = [
+  fluent.FluentIcons.view_dashboard,
+  fluent.FluentIcons.line_chart,
+  fluent.FluentIcons.settings,
+  fluent.FluentIcons.info,
 ];
 
 class ThrmShell extends StatefulWidget {
@@ -166,66 +158,40 @@ class _ThrmShellState extends State<ThrmShell> {
   @override
   Widget build(BuildContext context) {
     final selected = page.index;
-    return Scaffold(
-      appBar: AppBar(
+    final view = fluent.NavigationView(
+      titleBar: fluent.TitleBar(
+        isBackButtonVisible: false,
         title: Text('THRM · ${_pageLabels[selected]}'),
-        actions: [
-          AnimatedBuilder(
-            animation: widget.controller,
-            builder: (_, _) {
-              final online =
-                  widget.controller.connection == CoreConnection.connected;
-              return Padding(
-                padding: const EdgeInsets.only(right: 16),
-                child: Chip(
-                  avatar: Icon(online ? Icons.link : Icons.link_off, size: 18),
-                  label: Text(online ? 'Core 在线' : 'Core 离线'),
-                ),
-              );
-            },
-          ),
+        endHeader: AnimatedBuilder(
+          animation: widget.controller,
+          builder: (_, _) {
+            final online =
+                widget.controller.connection == CoreConnection.connected;
+            return Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: online
+                  ? const fluent.InfoBadge.success(source: Text('Core 在线'))
+                  : const fluent.InfoBadge.critical(source: Text('Core 离线')),
+            );
+          },
+        ),
+      ),
+      pane: fluent.NavigationPane(
+        selected: selected,
+        onChanged: _selectPage,
+        displayMode: fluent.PaneDisplayMode.expanded,
+        size: const fluent.NavigationPaneSize(openWidth: 180),
+        items: [
+          for (var index = 0; index < ThrmPage.values.length; index++)
+            fluent.PaneItem(
+              icon: Icon(_fluentPageIcons[index]),
+              title: Text(_pageLabels[index]),
+              body: _page(ThrmPage.values[index]),
+            ),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final content = _page(page);
-          if (constraints.maxWidth < 820) return content;
-          return Row(
-            children: [
-              NavigationRail(
-                selectedIndex: selected,
-                labelType: NavigationRailLabelType.all,
-                onDestinationSelected: _selectPage,
-                destinations: List.generate(
-                  ThrmPage.values.length,
-                  (index) => NavigationRailDestination(
-                    icon: Icon(_pageIcons[index]),
-                    selectedIcon: Icon(_selectedPageIcons[index]),
-                    label: Text(_pageLabels[index]),
-                  ),
-                ),
-              ),
-              const VerticalDivider(width: 1),
-              Expanded(child: content),
-            ],
-          );
-        },
-      ),
-      bottomNavigationBar: MediaQuery.sizeOf(context).width < 820
-          ? NavigationBar(
-              selectedIndex: selected,
-              onDestinationSelected: _selectPage,
-              destinations: List.generate(
-                ThrmPage.values.length,
-                (index) => NavigationDestination(
-                  icon: Icon(_pageIcons[index]),
-                  selectedIcon: Icon(_selectedPageIcons[index]),
-                  label: _pageLabels[index],
-                ),
-              ),
-            )
-          : null,
     );
+    return Scaffold(backgroundColor: Colors.transparent, body: view);
   }
 
   void _selectPage(int index) => setState(() => page = ThrmPage.values[index]);

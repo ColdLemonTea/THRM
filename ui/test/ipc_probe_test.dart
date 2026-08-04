@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:fluent_ui/fluent_ui.dart' as fluent;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,14 @@ import 'package:thrm_ui/ipc_probe.dart';
 import 'package:thrm_ui/main.dart' as app;
 import 'package:thrm_ui/smooth_scroll.dart';
 import 'package:thrm_ui/temperature_history.dart';
+
+Widget _fluentTestApp(Widget home) => fluent.FluentApp(
+  locale: const Locale('zh', 'CN'),
+  supportedLocales: const [Locale('zh', 'CN')],
+  builder: (_, child) =>
+      ScaffoldMessenger(child: child ?? const SizedBox.shrink()),
+  home: home,
+);
 
 void main() {
   test('temperature deltas preserve sensor metadata', () {
@@ -162,13 +171,13 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(home: app.ThrmShell(controller: controller)),
+      _fluentTestApp(app.ThrmShell(controller: controller)),
     );
     expect(find.text('THRM · 状态'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('关于'));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Flutter 3 渲染实验'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -259,10 +268,10 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(home: app.ThrmShell(controller: controller)),
+      _fluentTestApp(app.ThrmShell(controller: controller)),
     );
     await tester.tap(find.text('曲线').first);
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('风扇曲线'), findsOneWidget);
     expect(find.text('3 个控制点 · 当前显示 Core 生效曲线'), findsOneWidget);
