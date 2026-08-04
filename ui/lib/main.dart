@@ -1605,39 +1605,78 @@ class _TemperatureHistoryChart extends StatefulWidget {
 
 class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
   int? selectedIndex;
+  ({int start, int end})? zoomDomain;
+  double? dragStartX;
+  double? dragCurrentX;
+
+  List<TemperatureHistoryPoint> get _displayPoints {
+    final domain = zoomDomain;
+    if (domain == null) return widget.points;
+    final points = [
+      for (final point in widget.points)
+        if (point.timestamp >= domain.start && point.timestamp <= domain.end)
+          point,
+    ];
+    return points.length >= 2 ? points : widget.points;
+  }
 
   @override
   void didUpdateWidget(_TemperatureHistoryChart oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.points, widget.points) ||
-        (selectedIndex != null && selectedIndex! >= widget.points.length)) {
+    if (!identical(oldWidget.points, widget.points)) {
       selectedIndex = null;
+      final domain = zoomDomain;
+      if (domain != null &&
+          widget.points
+                  .where(
+                    (point) =>
+                        point.timestamp >= domain.start &&
+                        point.timestamp <= domain.end,
+                  )
+                  .take(2)
+                  .length <
+              2) {
+        zoomDomain = null;
+      }
     }
   }
 
-  void _selectAt(Offset position, Size size) {
+  int _pointIndexAt(
+    double x,
+    Rect chart,
+    List<TemperatureHistoryPoint> points,
+  ) {
+    final first = points.first.timestamp;
+    final span = math.max(1, points.last.timestamp - first);
+    final target = first + span * (x - chart.left) / chart.width;
+    var low = 0;
+    var high = points.length - 1;
+    while (low < high) {
+      final middle = (low + high) ~/ 2;
+      if (points[middle].timestamp < target) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    if (low > 0 &&
+        (points[low - 1].timestamp - target).abs() <
+            (points[low].timestamp - target).abs()) {
+      return low - 1;
+    }
+    return low;
+  }
+
+  void _selectAt(
+    Offset position,
+    Size size,
+    List<TemperatureHistoryPoint> points,
+  ) {
+    if (dragStartX != null) return;
     final chart = _temperatureHistoryChartRect(size);
     int? next;
     if (position.dx >= chart.left && position.dx <= chart.right) {
-      final first = widget.points.first.timestamp;
-      final span = math.max(1, widget.points.last.timestamp - first);
-      final target = first + span * (position.dx - chart.left) / chart.width;
-      var low = 0;
-      var high = widget.points.length - 1;
-      while (low < high) {
-        final middle = (low + high) ~/ 2;
-        if (widget.points[middle].timestamp < target) {
-          low = middle + 1;
-        } else {
-          high = middle;
-        }
-      }
-      next = low;
-      if (low > 0 &&
-          (widget.points[low - 1].timestamp - target).abs() <
-              (widget.points[low].timestamp - target).abs()) {
-        next = low - 1;
-      }
+      next = _pointIndexAt(position.dx, chart, points);
     }
     if (next != selectedIndex) setState(() => selectedIndex = next);
   }
@@ -1646,24 +1685,89 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
     if (selectedIndex != null) setState(() => selectedIndex = null);
   }
 
+  void _startZoom(Offset position, Rect chart) {
+    if (!chart.contains(position)) return;
+    setState(() {
+      dragStartX = position.dx;
+      dragCurrentX = position.dx;
+      selectedIndex = null;
+    });
+  }
+
+  void _updateZoom(double x, Rect chart) {
+    if (dragStartX == null) return;
+    setState(() {
+      dragCurrentX = x.clamp(chart.left, chart.right).toDouble();
+    });
+  }
+
+  void _cancelZoomSelection() {
+    if (dragStartX == null && dragCurrentX == null) return;
+    setState(() {
+      dragStartX = null;
+      dragCurrentX = null;
+    });
+  }
+
+  void _finishZoom(Rect chart, List<TemperatureHistoryPoint> points) {
+    final startX = dragStartX;
+    final endX = dragCurrentX;
+    if (startX == null || endX == null) return;
+    if ((endX - startX).abs() < 12) {
+      _cancelZoomSelection();
+      return;
+    }
+    final firstIndex = _pointIndexAt(startX, chart, points);
+    final lastIndex = _pointIndexAt(endX, chart, points);
+    if (firstIndex == lastIndex) {
+      _cancelZoomSelection();
+      return;
+    }
+    final start = math.min(firstIndex, lastIndex);
+    final end = math.max(firstIndex, lastIndex);
+    setState(() {
+      dragStartX = null;
+      dragCurrentX = null;
+      selectedIndex = null;
+      if (start > 0 || end < points.length - 1) {
+        zoomDomain = (
+          start: points[start].timestamp,
+          end: points[end].timestamp,
+        );
+      }
+    });
+  }
+
+  void _resetZoom() {
+    if (zoomDomain == null) return;
+    setState(() {
+      zoomDomain = null;
+      selectedIndex = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
+        final colors = Theme.of(context).colorScheme;
+        final points = _displayPoints;
         final index = selectedIndex;
-        final selected = index == null ? null : widget.points[index];
+        final selected = index == null ? null : points[index];
         final chart = _temperatureHistoryChartRect(size);
         final span = math.max(
           1,
-          widget.points.last.timestamp - widget.points.first.timestamp,
+          points.last.timestamp - points.first.timestamp,
         );
         final selectedX = selected == null
             ? 0.0
             : chart.left +
                   chart.width *
-                      (selected.timestamp - widget.points.first.timestamp) /
+                      (selected.timestamp - points.first.timestamp) /
                       span;
+        final dragStart = dragStartX;
+        final dragEnd = dragCurrentX;
         const tooltipWidth = 208.0;
         var tooltipLeft = selectedX + 12;
         if (tooltipLeft + tooltipWidth > size.width) {
@@ -1674,37 +1778,80 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
             .toDouble();
         return MouseRegion(
           cursor: SystemMouseCursors.precise,
-          onHover: (event) => _selectAt(event.localPosition, size),
+          onHover: (event) => _selectAt(event.localPosition, size, points),
           onExit: (_) => _clearSelection(),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: (details) => _selectAt(details.localPosition, size),
-            child: Stack(
-              children: [
-                CustomPaint(
-                  size: size,
-                  painter: _TemperatureHistoryPainter(
-                    points: widget.points,
-                    gapThreshold: widget.gapThreshold,
-                    cpuColor: widget.cpuColor,
-                    gpuColor: widget.gpuColor,
-                    fanColor: widget.fanColor,
-                    gridColor: widget.gridColor,
-                    labelColor: widget.labelColor,
-                    selectedIndex: selectedIndex,
+          child: Stack(
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (details) =>
+                    _selectAt(details.localPosition, size, points),
+                onHorizontalDragStart: (details) =>
+                    _startZoom(details.localPosition, chart),
+                onHorizontalDragUpdate: (details) =>
+                    _updateZoom(details.localPosition.dx, chart),
+                onHorizontalDragEnd: (_) => _finishZoom(chart, points),
+                onHorizontalDragCancel: _cancelZoomSelection,
+                onDoubleTap: _resetZoom,
+                child: Stack(
+                  children: [
+                    CustomPaint(
+                      size: size,
+                      painter: _TemperatureHistoryPainter(
+                        points: points,
+                        gapThreshold: widget.gapThreshold,
+                        cpuColor: widget.cpuColor,
+                        gpuColor: widget.gpuColor,
+                        fanColor: widget.fanColor,
+                        gridColor: widget.gridColor,
+                        labelColor: widget.labelColor,
+                        selectedIndex: selectedIndex,
+                      ),
+                    ),
+                    if (dragStart != null && dragEnd != null)
+                      Positioned(
+                        left: math.min(dragStart, dragEnd),
+                        top: chart.top,
+                        width: (dragEnd - dragStart).abs(),
+                        height: chart.height,
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: colors.primary.withAlpha(38),
+                              border: Border.all(
+                                color: colors.primary.withAlpha(120),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (selected != null)
+                      Positioned(
+                        left: tooltipLeft,
+                        top: chart.top + 8,
+                        width: tooltipWidth,
+                        child: IgnorePointer(
+                          child: _historyTooltip(context, selected),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (zoomDomain != null)
+                Positioned(
+                  top: chart.top + 4,
+                  right: size.width - chart.right + 4,
+                  child: TextButton(
+                    key: const ValueKey('temperature-history-reset-zoom'),
+                    onPressed: _resetZoom,
+                    style: TextButton.styleFrom(
+                      backgroundColor: colors.surfaceContainerHighest,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: const Text('重置缩放'),
                   ),
                 ),
-                if (selected != null)
-                  Positioned(
-                    left: tooltipLeft,
-                    top: chart.top + 8,
-                    width: tooltipWidth,
-                    child: IgnorePointer(
-                      child: _historyTooltip(context, selected),
-                    ),
-                  ),
-              ],
-            ),
+            ],
           ),
         );
       },

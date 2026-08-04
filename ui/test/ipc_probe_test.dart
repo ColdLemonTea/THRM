@@ -284,6 +284,28 @@ void main() {
     expect(find.text('54 °C'), findsOneWidget);
     expect(find.text('58 °C'), findsOneWidget);
     expect(find.text('1800 RPM'), findsOneWidget);
+
+    final chartRect = tester.getRect(historyChart);
+    await tester.dragFrom(
+      Offset(chartRect.left + chartRect.width * 0.5, chartRect.center.dy),
+      Offset(chartRect.width * 0.35, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('重置缩放'), findsOneWidget);
+    await tester.tap(find.text('重置缩放'));
+    await tester.pumpAndSettle();
+    expect(find.text('重置缩放'), findsNothing);
+
+    await tester.dragFrom(
+      Offset(chartRect.left + chartRect.width * 0.5, chartRect.center.dy),
+      Offset(chartRect.width * 0.35, 0),
+    );
+    await tester.pumpAndSettle();
+    await tester.tapAt(chartRect.center);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tapAt(chartRect.center);
+    await tester.pumpAndSettle();
+    expect(find.text('重置缩放'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
