@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter/services.dart';
 
 import 'app_controller.dart';
 import 'smooth_scroll.dart';
@@ -455,7 +456,7 @@ class FanCurvePage extends StatefulWidget {
 
 enum _PendingCurveAction { discard, save }
 
-enum _ProfileMenuAction { create, rename, delete }
+enum _ProfileMenuAction { create, rename, delete, export, import }
 
 class _FanCurvePageState extends State<FanCurvePage> {
   List<FanCurvePoint> savedCurve = const [];
@@ -699,6 +700,69 @@ class _FanCurvePageState extends State<FanCurvePage> {
     ).showSnackBar(const SnackBar(content: Text('曲线方案已删除')));
   }
 
+  Future<void> _exportProfiles() async {
+    if (dirty && !await _save()) return;
+    final code = await widget.controller.exportFanCurveProfiles();
+    if (!mounted) return;
+    if (code == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(widget.controller.error ?? '导出曲线方案失败')),
+      );
+      return;
+    }
+    try {
+      await Clipboard.setData(ClipboardData(text: code));
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('方案码已复制到剪贴板')));
+    } catch (caught) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('复制方案码失败：$caught')));
+    }
+  }
+
+  Future<void> _importProfiles() async {
+    String code;
+    try {
+      code =
+          (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim() ?? '';
+    } catch (caught) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('读取剪贴板失败：$caught')));
+      return;
+    }
+    if (!mounted) return;
+    if (code.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('剪贴板中没有方案码')));
+      return;
+    }
+    if (dirty && !await _save()) return;
+    final imported = await widget.controller.importFanCurveProfiles(code);
+    if (!mounted) return;
+    if (!imported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(widget.controller.error ?? '导入曲线方案失败')),
+      );
+      return;
+    }
+    final activeCurve = readFanCurve(widget.controller.config?['fanCurve']);
+    setState(() {
+      savedCurve = activeCurve;
+      draftCurve = activeCurve;
+      dirty = false;
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已导入为新曲线方案')));
+  }
+
   Future<void> _handleProfileAction(
     _ProfileMenuAction action,
     FanCurveProfileOption? profile,
@@ -710,6 +774,10 @@ class _FanCurvePageState extends State<FanCurvePage> {
         if (profile != null) await _renameProfile(profile);
       case _ProfileMenuAction.delete:
         if (profile != null) await _deleteProfile(profile);
+      case _ProfileMenuAction.export:
+        await _exportProfiles();
+      case _ProfileMenuAction.import:
+        await _importProfiles();
     }
   }
 
@@ -879,6 +947,27 @@ class _FanCurvePageState extends State<FanCurvePage> {
                                 Icon(Icons.delete_outline),
                                 SizedBox(width: 12),
                                 Text('删除方案'),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuDivider(),
+                          const PopupMenuItem(
+                            value: _ProfileMenuAction.export,
+                            child: Row(
+                              children: [
+                                Icon(Icons.content_copy_outlined),
+                                SizedBox(width: 12),
+                                Text('导出并复制方案码'),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: _ProfileMenuAction.import,
+                            child: Row(
+                              children: [
+                                Icon(Icons.content_paste_go_outlined),
+                                SizedBox(width: 12),
+                                Text('从剪贴板导入方案码'),
                               ],
                             ),
                           ),

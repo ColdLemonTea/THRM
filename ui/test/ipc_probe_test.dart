@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:thrm_ui/app_controller.dart';
 import 'package:thrm_ui/ipc_probe.dart';
@@ -443,6 +444,113 @@ void main() {
     expect(controller.config?['unknown'], {'preserved': true});
   });
 
+  testWidgets('profile transfer saves drafts and syncs imported config', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var clipboardText = '';
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardText = (call.arguments as Map)['text'] as String;
+        } else if (call.method == 'Clipboard.getData') {
+          return {'text': clipboardText};
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    const balancedCurve = [
+      {'temperature': 30, 'rpm': 1500},
+      {'temperature': 60, 'rpm': 2200},
+      {'temperature': 90, 'rpm': 3600},
+    ];
+    const importedCurve = [
+      {'temperature': 30, 'rpm': 1000},
+      {'temperature': 60, 'rpm': 1800},
+      {'temperature': 90, 'rpm': 3200},
+    ];
+    final responses = <String, Object?>{
+      'SetFanCurve': true,
+      'ExportFanCurveProfiles': 'B2C1.exported',
+      'ImportFanCurveProfiles': true,
+      'GetConfig': {
+        'fanCurve': importedCurve,
+        'fanCurveProfiles': [
+          {'id': 'balanced', 'name': '均衡', 'curve': balancedCurve},
+          {'id': 'imported', 'name': '导入项', 'curve': importedCurve},
+        ],
+        'activeFanCurveProfileId': 'imported',
+        'unknown': {'preserved': true},
+      },
+    };
+    final client = _RecordingIpcClient(responses);
+    final controller = AppController(client: client)
+      ..connection = CoreConnection.connected
+      ..config = {
+        'fanCurve': balancedCurve,
+        'fanCurveProfiles': [
+          {'id': 'balanced', 'name': '均衡', 'curve': balancedCurve},
+        ],
+        'activeFanCurveProfileId': 'balanced',
+        'unknown': {'preserved': true},
+      };
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.FanCurvePage(
+            controller: controller,
+            scrollController: scrollController,
+          ),
+        ),
+      ),
+    );
+    await tester.drag(
+      find.byKey(const ValueKey('fan-curve-point-0')),
+      const Offset(0, -30),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('有未保存修改'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('fan-curve-profile-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('导出并复制方案码'));
+    await tester.pumpAndSettle();
+    expect(client.requests.map((request) => request.type), [
+      'SetFanCurve',
+      'ExportFanCurveProfiles',
+    ]);
+    expect(clipboardText, 'B2C1.exported');
+    expect(find.textContaining('有未保存修改'), findsNothing);
+
+    client.requests.clear();
+    clipboardText = '  B2C1.imported  ';
+    await tester.tap(find.byKey(const ValueKey('fan-curve-profile-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('从剪贴板导入方案码'));
+    await tester.pumpAndSettle();
+    expect(client.requests.map((request) => request.type), [
+      'ImportFanCurveProfiles',
+      'GetConfig',
+    ]);
+    expect(client.requests.first.data, {'code': 'B2C1.imported'});
+    expect(controller.config?['activeFanCurveProfileId'], 'imported');
+    expect(controller.config?['fanCurve'], importedCurve);
+    expect(controller.config?['unknown'], {'preserved': true});
+    expect(find.text('导入项'), findsOneWidget);
+  });
+
   testWidgets('mouse wheel scrolling animates and accumulates ticks', (
     tester,
   ) async {
@@ -613,6 +721,28 @@ void main() {
           final managedConfig =
               await probe.request('GetConfig') as Map<String, dynamic>;
           expect(managedConfig['activeFanCurveProfileId'], 'quiet');
+          final exportedCode = await controller.exportFanCurveProfiles();
+          expect(exportedCode, startsWith('B2C1.'));
+          expect(
+            await controller.importFanCurveProfiles(exportedCode!),
+            isTrue,
+          );
+          final importedProfiles =
+              controller.config?['fanCurveProfiles'] as List;
+          expect(importedProfiles, hasLength(4));
+          expect(controller.config?['activeFanCurveProfileId'], isNot('quiet'));
+          expect(
+            ((controller.config?['fanCurve'] as List).first as Map)['rpm'],
+            800,
+          );
+          expect(controller.config?['unknown'], {'preserved': true});
+          final importedConfig =
+              await probe.request('GetConfig') as Map<String, dynamic>;
+          expect(importedConfig['fanCurveProfiles'], hasLength(4));
+          expect(
+            importedConfig['activeFanCurveProfileId'],
+            controller.config?['activeFanCurveProfileId'],
+          );
         } finally {
           controller.dispose();
         }

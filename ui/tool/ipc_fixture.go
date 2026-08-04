@@ -142,6 +142,33 @@ func main() {
 				fanCurve = append([]types.FanCurvePoint(nil), fanCurveProfiles[index].Curve...)
 			}
 			return response(true)
+		case ipc.ReqExportFanCurveProfiles:
+			code, err := curveprofiles.Export(activeProfileID, fanCurveProfiles)
+			if err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			return response(code)
+		case ipc.ReqImportFanCurveProfiles:
+			var data ipc.ImportFanCurveProfilesParams
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			profiles, importedActiveID, err := curveprofiles.Import(data.Code)
+			if err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			fanCurveProfiles, activeProfileID = curveprofiles.AppendImportedProfiles(
+				fanCurveProfiles,
+				profiles,
+				importedActiveID,
+			)
+			for _, profile := range fanCurveProfiles {
+				if profile.ID == activeProfileID {
+					fanCurve = append([]types.FanCurvePoint(nil), profile.Curve...)
+					break
+				}
+			}
+			return response(true)
 		case ipc.ReqGetDeviceStatus:
 			return response(map[string]any{
 				"connected": true,

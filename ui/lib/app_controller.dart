@@ -243,6 +243,44 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<String?> exportFanCurveProfiles() async {
+    if (!client.isConnected || updatingFanCurveProfile) return null;
+    updatingFanCurveProfile = true;
+    error = null;
+    _notify();
+    try {
+      final code = await client.request('ExportFanCurveProfiles');
+      if (code is! String || code.isEmpty) {
+        throw const FormatException('ExportFanCurveProfiles 返回的方案码无效');
+      }
+      return code;
+    } catch (caught) {
+      error = '导出风扇曲线方案失败：$caught';
+      return null;
+    } finally {
+      updatingFanCurveProfile = false;
+      _notify();
+    }
+  }
+
+  Future<bool> importFanCurveProfiles(String code) async {
+    if (!client.isConnected || updatingFanCurveProfile) return false;
+    updatingFanCurveProfile = true;
+    error = null;
+    _notify();
+    try {
+      await client.request('ImportFanCurveProfiles', data: {'code': code});
+      config = _jsonMap(await client.request('GetConfig'), 'GetConfig');
+      return true;
+    } catch (caught) {
+      error = '导入风扇曲线方案失败：$caught';
+      return false;
+    } finally {
+      updatingFanCurveProfile = false;
+      _notify();
+    }
+  }
+
   Future<void> _syncSnapshot() async {
     final responses = await Future.wait([
       client.request('GetConfig'),
