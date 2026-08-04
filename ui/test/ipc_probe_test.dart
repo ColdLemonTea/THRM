@@ -29,6 +29,18 @@ void main() {
     });
   });
 
+  test('config patch preserves fields unknown to Flutter', () {
+    final original = {
+      'autoControl': true,
+      'unknown': {'preserved': true},
+    };
+    expect(patchConfig(original, {'autoControl': false}), {
+      'autoControl': false,
+      'unknown': {'preserved': true},
+    });
+    expect(original['autoControl'], isTrue);
+  });
+
   testWidgets('desktop shell fits the minimum window', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -58,6 +70,38 @@ void main() {
     );
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 6));
+  });
+
+  testWidgets('status page shows power, bridge warning, and auto control', (
+    tester,
+  ) async {
+    final controller = AppController()
+      ..connection = CoreConnection.connected
+      ..deviceConnected = true
+      ..config = {'autoControl': true}
+      ..temperature = {
+        'cpuPower': 42.5,
+        'gpuPower': 80,
+        'bridgeOk': false,
+        'bridgeMessage': 'PawnIO 读取失败',
+      };
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.StatusPage(
+          controller: controller,
+          scrollController: scrollController,
+        ),
+      ),
+    );
+
+    expect(find.text('42.5W'), findsOneWidget);
+    expect(find.text('80W'), findsOneWidget);
+    expect(find.text('PawnIO 读取失败'), findsOneWidget);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
   });
 
   testWidgets('mouse wheel scrolling animates and accumulates ticks', (
@@ -171,6 +215,9 @@ void main() {
           expect(controller.connection, CoreConnection.connected);
           expect(controller.deviceConnected, isTrue);
           expect(controller.deviceStatus?['model'], 'THRM fixture');
+          expect(controller.config?['unknown'], {'preserved': true});
+          await controller.setAutoControl(false);
+          expect(controller.config?['autoControl'], isFalse);
           expect(controller.config?['unknown'], {'preserved': true});
         } finally {
           controller.dispose();

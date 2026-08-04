@@ -197,6 +197,13 @@ class StatusPage extends StatelessWidget {
         final fan = controller.fanData;
         final status = controller.deviceStatus;
         final connected = controller.connection == CoreConnection.connected;
+        final autoControl = controller.config?['autoControl'] == true;
+        final bridgeFailed = temp?['bridgeOk'] == false;
+        final cpuTempError = temp?['cpuTempError']?.toString().trim() ?? '';
+        final bridgeMessage = temp?['bridgeMessage']?.toString().trim() ?? '';
+        final temperatureWarning = bridgeFailed
+            ? (bridgeMessage.isEmpty ? '温度监控暂不可用，Core 将继续自动恢复。' : bridgeMessage)
+            : (cpuTempError.isEmpty ? null : cpuTempError);
         return RefreshIndicator(
           onRefresh: controller.refresh,
           child: ListView(
@@ -249,6 +256,16 @@ class StatusPage extends StatelessWidget {
                     value: _metric(temp, 'gpuTemp', '°C'),
                   ),
                   MetricCard(
+                    icon: Icons.electric_bolt,
+                    label: 'CPU 功耗',
+                    value: _metric(temp, 'cpuPower', 'W'),
+                  ),
+                  MetricCard(
+                    icon: Icons.bolt,
+                    label: 'GPU 功耗',
+                    value: _metric(temp, 'gpuPower', 'W'),
+                  ),
+                  MetricCard(
                     icon: Icons.air,
                     label: '当前转速',
                     value: _metric(fan, 'currentRpm', ' RPM'),
@@ -260,6 +277,17 @@ class StatusPage extends StatelessWidget {
                   ),
                 ],
               ),
+              if (temperatureWarning != null) ...[
+                const SizedBox(height: 16),
+                Card(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: ListTile(
+                    leading: const Icon(Icons.warning_amber),
+                    title: const Text('温度监控异常'),
+                    subtitle: Text(temperatureWarning),
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               Card(
                 child: Column(
@@ -277,15 +305,25 @@ class StatusPage extends StatelessWidget {
                       ),
                     ),
                     const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.auto_awesome),
-                      title: const Text('控制模式'),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.auto_awesome),
+                      title: const Text('智能控温'),
                       subtitle: Text(
-                        controller.config?['autoControl'] == true
-                            ? '智能控温'
-                            : '手动模式',
+                        controller.updatingAutoControl
+                            ? '正在切换…'
+                            : '${autoControl ? '已开启' : '已关闭'} · '
+                                  '最近事件：${controller.lastEvent ?? '--'}',
                       ),
-                      trailing: Text('事件：${controller.lastEvent ?? '--'}'),
+                      value: autoControl,
+                      onChanged:
+                          connected &&
+                              controller.deviceConnected &&
+                              controller.config != null &&
+                              !controller.updatingAutoControl
+                          ? (enabled) async {
+                              await controller.setAutoControl(enabled);
+                            }
+                          : null,
                     ),
                   ],
                 ),

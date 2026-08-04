@@ -37,6 +37,11 @@ Map<String, dynamic> mergeTemperatureMetadata(
   return merged;
 }
 
+Map<String, dynamic> patchConfig(
+  Map<String, dynamic>? current,
+  Map<String, dynamic> patch,
+) => {...?current, ...patch};
+
 class AppController extends ChangeNotifier {
   AppController({IpcClient? client})
     : client = client ?? IpcClient(timeout: const Duration(seconds: 6));
@@ -51,6 +56,7 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic>? fanData;
   Map<String, dynamic>? temperature;
   bool deviceConnected = false;
+  bool updatingAutoControl = false;
 
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   bool _started = false;
@@ -107,6 +113,22 @@ class AppController extends ChangeNotifier {
       error = '刷新失败：$caught';
     }
     _notify();
+  }
+
+  Future<void> setAutoControl(bool enabled) async {
+    if (!client.isConnected || updatingAutoControl) return;
+    updatingAutoControl = true;
+    error = null;
+    _notify();
+    try {
+      await client.request('SetAutoControl', data: {'enabled': enabled});
+      config = patchConfig(config, {'autoControl': enabled});
+    } catch (caught) {
+      error = '设置智能控温失败：$caught';
+    } finally {
+      updatingAutoControl = false;
+      _notify();
+    }
   }
 
   Future<void> _syncSnapshot() async {

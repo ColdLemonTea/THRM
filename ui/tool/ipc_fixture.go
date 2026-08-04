@@ -18,6 +18,7 @@ func response(data any) ipc.Response {
 func main() {
 	restart := make(chan struct{}, 1)
 	quit := make(chan struct{}, 1)
+	autoControl := true
 	handler := func(req ipc.Request) ipc.Response {
 		switch req.Type {
 		case ipc.ReqPing:
@@ -32,10 +33,17 @@ func main() {
 			return response("pong")
 		case ipc.ReqGetConfig:
 			return response(map[string]any{
-				"autoControl": true,
+				"autoControl": autoControl,
 				"blob":        strings.Repeat("x", 16*1024),
 				"unknown":     map[string]bool{"preserved": true},
 			})
+		case ipc.ReqSetAutoControl:
+			var data ipc.SetAutoControlParams
+			if err := json.Unmarshal(req.Data, &data); err != nil {
+				return ipc.Response{Success: false, Error: err.Error()}
+			}
+			autoControl = data.Enabled
+			return response(true)
 		case ipc.ReqGetDeviceStatus:
 			return response(map[string]any{
 				"connected": true,
