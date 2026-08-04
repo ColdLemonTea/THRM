@@ -3,10 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:thrm_ui/app_controller.dart';
 import 'package:thrm_ui/ipc_probe.dart';
 import 'package:thrm_ui/main.dart' as app;
+import 'package:thrm_ui/smooth_scroll.dart';
 
 void main() {
   test('temperature deltas preserve sensor metadata', () {
@@ -43,6 +45,36 @@ void main() {
     await tester.pump();
     expect(find.text('Flutter 3 渲染实验'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mouse wheel scrolling animates and accumulates ticks', (
+    tester,
+  ) async {
+    final controller = SmoothScrollController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListView.builder(
+          controller: controller,
+          itemExtent: 100,
+          itemCount: 20,
+          itemBuilder: (_, index) => Text('$index'),
+        ),
+      ),
+    );
+
+    final pointer = TestPointer(1, PointerDeviceKind.mouse);
+    final center = tester.getCenter(find.byType(ListView));
+    await tester.sendEventToBinding(pointer.hover(center));
+    await tester.sendEventToBinding(pointer.scroll(const Offset(0, 120)));
+    expect(controller.offset, 0);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    expect(controller.offset, inExclusiveRange(0, 120));
+
+    await tester.sendEventToBinding(pointer.scroll(const Offset(0, 120)));
+    await tester.pumpAndSettle();
+    expect(controller.offset, closeTo(240, 0.1));
   });
 
   test(

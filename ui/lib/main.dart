@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'app_controller.dart';
+import 'smooth_scroll.dart';
 
 void main() => runApp(const ThrmApp());
 
@@ -77,6 +78,15 @@ class ThrmShell extends StatefulWidget {
 
 class _ThrmShellState extends State<ThrmShell> {
   ThrmPage page = ThrmPage.status;
+  final statusScrollController = SmoothScrollController();
+  final aboutScrollController = SmoothScrollController();
+
+  @override
+  void dispose() {
+    statusScrollController.dispose();
+    aboutScrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -146,7 +156,10 @@ class _ThrmShellState extends State<ThrmShell> {
   void _selectPage(int index) => setState(() => page = ThrmPage.values[index]);
 
   Widget _page(ThrmPage selected) => switch (selected) {
-    ThrmPage.status => StatusPage(controller: widget.controller),
+    ThrmPage.status => StatusPage(
+      controller: widget.controller,
+      scrollController: statusScrollController,
+    ),
     ThrmPage.curve => const PlaceholderPage(
       icon: Icons.show_chart,
       title: '曲线页',
@@ -157,14 +170,19 @@ class _ThrmShellState extends State<ThrmShell> {
       title: '控制页',
       message: '硬件控制仍由现有 Go Core 负责。',
     ),
-    ThrmPage.about => const RenderingLabPage(),
+    ThrmPage.about => RenderingLabPage(scrollController: aboutScrollController),
   };
 }
 
 class StatusPage extends StatelessWidget {
-  const StatusPage({required this.controller, super.key});
+  const StatusPage({
+    required this.controller,
+    required this.scrollController,
+    super.key,
+  });
 
   final AppController controller;
+  final ScrollController scrollController;
 
   @override
   Widget build(BuildContext context) {
@@ -178,6 +196,7 @@ class StatusPage extends StatelessWidget {
         return RefreshIndicator(
           onRefresh: controller.refresh,
           child: ListView(
+            controller: scrollController,
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(20),
             children: [
@@ -343,7 +362,9 @@ class PlaceholderPage extends StatelessWidget {
 }
 
 class RenderingLabPage extends StatefulWidget {
-  const RenderingLabPage({super.key});
+  const RenderingLabPage({required this.scrollController, super.key});
+
+  final ScrollController scrollController;
 
   @override
   State<RenderingLabPage> createState() => _RenderingLabPageState();
@@ -372,6 +393,7 @@ class _RenderingLabPageState extends State<RenderingLabPage>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) => ListView(
+        controller: widget.scrollController,
         padding: const EdgeInsets.all(20),
         children: [
           Text('Flutter 3 渲染实验', style: Theme.of(context).textTheme.titleLarge),
