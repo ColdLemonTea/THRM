@@ -173,7 +173,9 @@ void main() {
     await tester.pumpWidget(
       _fluentTestApp(app.ThrmShell(controller: controller)),
     );
-    expect(find.text('THRM · 状态'), findsOneWidget);
+    expect(find.text('THRM · 状态'), findsNothing);
+    expect(find.text('Core 离线'), findsNothing);
+    expect(find.text('正在自动连接后台服务'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('关于'));
@@ -213,8 +215,8 @@ void main() {
     addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: app.StatusPage(
+      _fluentTestApp(
+        app.StatusPage(
           controller: controller,
           scrollController: scrollController,
         ),
@@ -224,7 +226,14 @@ void main() {
     expect(find.text('42.5W'), findsOneWidget);
     expect(find.text('80W'), findsOneWidget);
     expect(find.text('PawnIO 读取失败'), findsOneWidget);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+    scrollController.jumpTo(scrollController.position.maxScrollExtent);
+    await tester.pump();
+    expect(
+      tester
+          .widget<fluent.ToggleSwitch>(find.byType(fluent.ToggleSwitch))
+          .checked,
+      isTrue,
+    );
   });
 
   testWidgets('curve page renders the Core curve', (tester) async {

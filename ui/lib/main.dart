@@ -159,23 +159,7 @@ class _ThrmShellState extends State<ThrmShell> {
   Widget build(BuildContext context) {
     final selected = page.index;
     final view = fluent.NavigationView(
-      titleBar: fluent.TitleBar(
-        isBackButtonVisible: false,
-        title: Text('THRM · ${_pageLabels[selected]}'),
-        endHeader: AnimatedBuilder(
-          animation: widget.controller,
-          builder: (_, _) {
-            final online =
-                widget.controller.connection == CoreConnection.connected;
-            return Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: online
-                  ? const fluent.InfoBadge.success(source: Text('Core 在线'))
-                  : const fluent.InfoBadge.critical(source: Text('Core 离线')),
-            );
-          },
-        ),
-      ),
+      titleBar: const fluent.TitleBar(isBackButtonVisible: false),
       pane: fluent.NavigationPane(
         selected: selected,
         onChanged: _selectPage,
@@ -240,117 +224,122 @@ class StatusPage extends StatelessWidget {
         final temperatureWarning = bridgeFailed
             ? (bridgeMessage.isEmpty ? '温度监控暂不可用，Core 将继续自动恢复。' : bridgeMessage)
             : (cpuTempError.isEmpty ? null : cpuTempError);
-        return RefreshIndicator(
-          onRefresh: controller.refresh,
-          child: ListView(
-            controller: scrollController,
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(20),
-            children: [
-              Card(
-                color: connected
-                    ? Theme.of(context).colorScheme.primaryContainer
-                    : Theme.of(context).colorScheme.errorContainer,
-                child: ListTile(
-                  leading: Icon(
-                    connected ? Icons.cloud_done : Icons.cloud_off,
-                    size: 32,
-                  ),
-                  title: Text(connected ? '已连接 THRM Core' : '正在等待 THRM Core'),
-                  subtitle: Text(
-                    controller.error ??
-                        (controller.deviceConnected
-                            ? '设备已连接，实时事件由 Core 推送'
-                            : 'Core 在线，设备当前未连接'),
-                  ),
-                  trailing: IconButton(
-                    tooltip: '刷新快照',
-                    onPressed: connected ? controller.refresh : null,
-                    icon: const Icon(Icons.refresh),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text('实时状态', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 8),
-              GridView.extent(
-                maxCrossAxisExtent: 280,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                childAspectRatio: 1.55,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                children: [
-                  MetricCard(
-                    icon: Icons.memory,
-                    label: 'CPU 温度',
-                    value: _metric(temp, 'cpuTemp', '°C'),
-                  ),
-                  MetricCard(
-                    icon: Icons.videogame_asset_outlined,
-                    label: 'GPU 温度',
-                    value: _metric(temp, 'gpuTemp', '°C'),
-                  ),
-                  MetricCard(
-                    icon: Icons.electric_bolt,
-                    label: 'CPU 功耗',
-                    value: _metric(temp, 'cpuPower', 'W'),
-                  ),
-                  MetricCard(
-                    icon: Icons.bolt,
-                    label: 'GPU 功耗',
-                    value: _metric(temp, 'gpuPower', 'W'),
-                  ),
-                  MetricCard(
-                    icon: Icons.air,
-                    label: '当前转速',
-                    value: _metric(fan, 'currentRpm', ' RPM'),
-                  ),
-                  MetricCard(
-                    icon: Icons.speed,
-                    label: '目标转速',
-                    value: _metric(fan, 'targetRpm', ' RPM'),
-                  ),
-                ],
-              ),
-              if (temperatureWarning != null) ...[
-                const SizedBox(height: 16),
-                Card(
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  child: ListTile(
-                    leading: const Icon(Icons.warning_amber),
-                    title: const Text('温度监控异常'),
-                    subtitle: Text(temperatureWarning),
-                  ),
+        final connectionMessage =
+            controller.error ??
+            (connected
+                ? controller.deviceConnected
+                      ? '设备已连接，实时事件由 Core 推送'
+                      : 'Core 在线，设备当前未连接'
+                : '正在自动连接后台服务');
+        final typography = fluent.FluentTheme.of(context).typography;
+        return fluent.ScaffoldPage.scrollable(
+          scrollController: scrollController,
+          header: fluent.PageHeader(
+            title: const Text('状态'),
+            commandBar: fluent.CommandBar(
+              mainAxisAlignment: MainAxisAlignment.end,
+              primaryItems: [
+                fluent.CommandBarButton(
+                  icon: const Icon(fluent.FluentIcons.refresh),
+                  label: const Text('刷新'),
+                  tooltip: '刷新快照',
+                  onPressed: connected ? controller.refresh : null,
                 ),
               ],
+            ),
+          ),
+          children: [
+            fluent.InfoBar(
+              title: Text(connected ? '已连接 THRM Core' : '正在等待 THRM Core'),
+              content: Text(connectionMessage),
+              severity: controller.error != null
+                  ? fluent.InfoBarSeverity.error
+                  : connected
+                  ? fluent.InfoBarSeverity.success
+                  : fluent.InfoBarSeverity.warning,
+            ),
+            const SizedBox(height: 16),
+            Text('实时状态', style: typography.subtitle),
+            const SizedBox(height: 8),
+            GridView.extent(
+              maxCrossAxisExtent: 280,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              childAspectRatio: 1.55,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              children: [
+                MetricCard(
+                  icon: fluent.WindowsIcons.cpu,
+                  label: 'CPU 温度',
+                  value: _metric(temp, 'cpuTemp', '°C'),
+                ),
+                MetricCard(
+                  icon: fluent.WindowsIcons.cpu,
+                  label: 'GPU 温度',
+                  value: _metric(temp, 'gpuTemp', '°C'),
+                ),
+                MetricCard(
+                  icon: fluent.FluentIcons.lightning_bolt,
+                  label: 'CPU 功耗',
+                  value: _metric(temp, 'cpuPower', 'W'),
+                ),
+                MetricCard(
+                  icon: fluent.FluentIcons.power_button,
+                  label: 'GPU 功耗',
+                  value: _metric(temp, 'gpuPower', 'W'),
+                ),
+                MetricCard(
+                  icon: fluent.FluentIcons.speed_high,
+                  label: '当前转速',
+                  value: _metric(fan, 'currentRpm', ' RPM'),
+                ),
+                MetricCard(
+                  icon: fluent.FluentIcons.speed_high,
+                  label: '目标转速',
+                  value: _metric(fan, 'targetRpm', ' RPM'),
+                ),
+              ],
+            ),
+            if (temperatureWarning != null) ...[
               const SizedBox(height: 16),
-              Card(
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: Icon(
-                        controller.deviceConnected ? Icons.usb : Icons.usb_off,
-                      ),
-                      title: Text(
-                        controller.deviceConnected ? '设备已连接' : '设备未连接',
-                      ),
-                      subtitle: Text(
-                        '${status?['model'] ?? '未知型号'} · '
-                        '${status?['productId'] ?? '--'}',
-                      ),
+              fluent.InfoBar.error(
+                title: const Text('温度监控异常'),
+                content: Text(temperatureWarning),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Text('设备与控制', style: typography.subtitle),
+            const SizedBox(height: 8),
+            fluent.Card(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  fluent.ListTile(
+                    leading: Icon(
+                      controller.deviceConnected
+                          ? fluent.FluentIcons.usb
+                          : fluent.WindowsIcons.disconnect_drive,
                     ),
-                    const Divider(height: 1),
-                    SwitchListTile(
-                      secondary: const Icon(Icons.auto_awesome),
-                      title: const Text('智能控温'),
-                      subtitle: Text(
-                        controller.updatingAutoControl
-                            ? '正在切换…'
-                            : '${autoControl ? '已开启' : '已关闭'} · '
-                                  '最近事件：${controller.lastEvent ?? '--'}',
-                      ),
-                      value: autoControl,
+                    title: Text(controller.deviceConnected ? '设备已连接' : '设备未连接'),
+                    subtitle: Text(
+                      '${status?['model'] ?? '未知型号'} · '
+                      '${status?['productId'] ?? '--'}',
+                    ),
+                  ),
+                  const fluent.Divider(),
+                  fluent.ListTile(
+                    leading: const Icon(fluent.FluentIcons.snowflake),
+                    title: const Text('智能控温'),
+                    subtitle: Text(
+                      controller.updatingAutoControl
+                          ? '正在切换…'
+                          : '${autoControl ? '已开启' : '已关闭'} · '
+                                '最近事件：${controller.lastEvent ?? '--'}',
+                    ),
+                    trailing: fluent.ToggleSwitch(
+                      checked: autoControl,
+                      semanticLabel: '智能控温',
                       onChanged:
                           connected &&
                               controller.deviceConnected &&
@@ -361,11 +350,11 @@ class StatusPage extends StatelessWidget {
                             }
                           : null,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         );
       },
     );
@@ -391,17 +380,18 @@ class MetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(children: [Icon(icon), const SizedBox(width: 8), Text(label)]),
-            Text(value, style: Theme.of(context).textTheme.headlineSmall),
-          ],
-        ),
+    return fluent.Card(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(children: [Icon(icon), const SizedBox(width: 8), Text(label)]),
+          Text(
+            value,
+            style: fluent.FluentTheme.of(context).typography.subtitle,
+          ),
+        ],
       ),
     );
   }
