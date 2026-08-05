@@ -91,6 +91,32 @@
             </StackPanel>
           </Border>
         </Grid>
+
+        <Border Background="{DynamicResource CardBrush}" CornerRadius="12" Padding="20">
+          <StackPanel Spacing="12">
+            <TextBlock Text="Manual fan control" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Text="Select a Core preset and apply it to the connected device. The labels are English; the existing Core protocol values are sent unchanged." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
+            <Grid ColumnDefinitions="Auto,16,180,16,Auto,16,180,16,Auto" RowDefinitions="Auto,Auto" RowSpacing="8">
+              <TextBlock Text="Gear preset" VerticalAlignment="Center" />
+              <ComboBox x:Name="ManualGearComboBox" Grid.Column="2" SelectedIndex="-1" IsEnabled="False" SelectionChanged="ManualSelectionChanged">
+                <ComboBoxItem Content="Quiet" />
+                <ComboBoxItem Content="Standard" />
+                <ComboBoxItem Content="Strong" />
+                <ComboBoxItem Content="Overclock" />
+              </ComboBox>
+              <TextBlock x:Name="ManualLevelLabel" Grid.Column="4" Text="Level" VerticalAlignment="Center" />
+              <ComboBox x:Name="ManualLevelComboBox" Grid.Column="6" SelectedIndex="-1" IsEnabled="False" SelectionChanged="ManualSelectionChanged">
+                <ComboBoxItem Content="Low" />
+                <ComboBoxItem Content="Medium" />
+                <ComboBoxItem Content="High" />
+              </ComboBox>
+              <Button x:Name="ApplyManualGearButton" Grid.Column="8" Content="Apply" Click="ApplyManualGearClick" IsEnabled="False" />
+              <TextBlock x:Name="ManualLevelInfo" Grid.Row="1" Grid.ColumnSpan="9" Text="BS1 uses fixed presets; level not applicable." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" IsVisible="False" />
+            </Grid>
+            <TextBlock x:Name="ManualAppliedText" Text="Applied preset: —" Foreground="{DynamicResource MutedBrush}" />
+            <TextBlock x:Name="ManualControlAvailabilityText" Text="Manual control is waiting for synchronized Core state." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
       </StackPanel>
     </ScrollViewer>
 

@@ -138,6 +138,9 @@ public sealed class ThrmIpcClient : IDisposable
     public Task<bool> SetAutoControlAsync(bool enabled, CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("SetAutoControl", new { enabled }, cancellationToken);
 
+    public Task<bool> SetManualGearAsync(string gear, string level, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetManualGear", new { gear, level }, cancellationToken);
+
     private async Task<T> SendRequestAsync<T>(string type, object? data, CancellationToken cancellationToken)
     {
         Stream stream;
@@ -538,6 +541,9 @@ internal sealed class IpcResponse
 public sealed class ConfigSnapshot
 {
     [JsonPropertyName("autoControl")] public bool AutoControl { get; init; }
+    [JsonPropertyName("manualGear")] public string? ManualGear { get; init; }
+    [JsonPropertyName("manualLevel")] public string? ManualLevel { get; init; }
+    [JsonPropertyName("customSpeedEnabled")] public bool CustomSpeedEnabled { get; init; }
 }
 
 public sealed class DeviceStatusSnapshot
@@ -600,6 +606,22 @@ internal static class IpcProtocolSelfCheck
             || enabled.ValueKind != JsonValueKind.True)
         {
             throw new InvalidOperationException("SetAutoControl request check failed.");
+        }
+
+        using var manualGearRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetManualGear", new { gear = "标准", level = "中" }, "self-check-manual"));
+        var manualGearData = manualGearRequest.RootElement.GetProperty("data");
+        if (manualGearRequest.RootElement.GetProperty("type").GetString() != "SetManualGear"
+            || manualGearData.ValueKind != JsonValueKind.Object
+            || manualGearData.EnumerateObject().Count() != 2
+            || !manualGearData.TryGetProperty("gear", out var gear)
+            || gear.ValueKind != JsonValueKind.String
+            || gear.GetString() != "标准"
+            || !manualGearData.TryGetProperty("level", out var level)
+            || level.ValueKind != JsonValueKind.String
+            || level.GetString() != "中")
+        {
+            throw new InvalidOperationException("SetManualGear request check failed.");
         }
 
         var response = JsonSerializer.Deserialize<IpcMessage>(
