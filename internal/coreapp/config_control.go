@@ -72,6 +72,7 @@ func (a *CoreApp) UpdateConfig(cfg types.AppConfig) error {
 	}
 	cfg.LightStrip, _ = normalizeLightStripConfig(cfg.LightStrip)
 	cfg.ThemeMode = types.NormalizeThemeMode(cfg.ThemeMode)
+	cfg.Locale = types.NormalizeLocale(cfg.Locale)
 	cfg.TempSource = types.NormalizeTempSource(cfg.TempSource)
 	cfg.GpuDevice = types.NormalizeDeviceSelection(cfg.GpuDevice)
 	cfg.CpuSensor = types.NormalizeSensorSelection(cfg.CpuSensor)

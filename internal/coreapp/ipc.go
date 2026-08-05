@@ -352,6 +352,31 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) ipc.Response {
 		atomic.StoreInt64(&a.guiLastResponse, time.Now().Unix())
 		return a.successResponse(true)
 
+	case ipc.ReqExportDiagnostics:
+		var params struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析诊断包路径失败: " + err.Error())
+		}
+		if err := a.ExportDiagnosticPackage(params.Path); err != nil {
+			return a.errorResponse(err.Error())
+		}
+		return a.dataResponse(params.Path)
+
+	case ipc.ReqDownloadInstallUpdate:
+		var params updateRequest
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析更新参数失败: " + err.Error())
+		}
+		if params.GuiPID <= 0 {
+			return a.errorResponse("GUI 进程 ID 无效")
+		}
+		a.safeGo("downloadAndInstallUpdate", func() {
+			a.DownloadAndInstallUpdate(params)
+		})
+		return a.successResponse(true)
+
 	// 系统相关
 	case ipc.ReqPing:
 		return a.dataResponse("pong")

@@ -181,7 +181,8 @@ func TestRequestTypeConstants_Distinct(t *testing.T) {
 		ReqGetAutoStartMethod, ReqSetAutoStartWithMethod,
 		ReqShowWindow, ReqHideWindow, ReqQuitApp,
 		ReqGetDebugInfo, ReqSetDebugMode, ReqSendDeviceDebugCommand,
-		ReqGetDeviceDebugFrames, ReqUpdateGuiResponseTime,
+		ReqGetDeviceDebugFrames, ReqUpdateGuiResponseTime, ReqExportDiagnostics,
+		ReqDownloadInstallUpdate,
 		ReqPing, ReqIsAutoStartLaunch, ReqSubscribeEvents, ReqUnsubscribeEvents,
 	}
 	seen := make(map[RequestType]bool)
@@ -202,6 +203,7 @@ func TestEventTypeConstants_Distinct(t *testing.T) {
 		EventDeviceConnected, EventDeviceDisconnected, EventDeviceError,
 		EventDeviceSettingsUpdate, EventConfigUpdate, EventHotkeyTriggered,
 		EventLegionPowerModeUpdate, EventLegionFnQSupportUpdate,
+		EventUpdateDownloadProgress,
 		EventHealthPing, EventHeartbeat,
 	}
 	seen := make(map[string]bool)

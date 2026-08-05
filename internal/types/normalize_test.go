@@ -26,6 +26,12 @@ func TestNormalizeThemeMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeLocale(t *testing.T) {
+	if NormalizeLocale("en-US") != LocaleEnUS || NormalizeLocale("invalid") != LocaleZhCN {
+		t.Fatal("NormalizeLocale did not preserve supported locale or default to zh-CN")
+	}
+}
+
 func TestNormalizeTempSource(t *testing.T) {
 	tests := []struct {
 		input string

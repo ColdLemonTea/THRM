@@ -44,10 +44,12 @@ Map<String, dynamic> patchConfig(
 ) => {...?current, ...patch};
 
 class AppController extends ChangeNotifier {
-  AppController({IpcClient? client})
+  AppController({IpcClient? client, this.onShowWindow, this.onQuit})
     : client = client ?? IpcClient(timeout: const Duration(seconds: 6));
 
   final IpcClient client;
+  final Future<void> Function()? onShowWindow;
+  final Future<void> Function()? onQuit;
 
   CoreConnection connection = CoreConnection.connecting;
   String? error;
@@ -56,6 +58,10 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic>? deviceStatus;
   Map<String, dynamic>? fanData;
   Map<String, dynamic>? temperature;
+  Map<String, dynamic>? deviceSettings;
+  Map<String, dynamic>? lastNotice;
+  Map<String, dynamic>? updateProgress;
+  int noticeVersion = 0;
   TemperatureHistorySnapshot temperatureHistory =
       emptyTemperatureHistorySnapshot;
   bool deviceConnected = false;
@@ -71,6 +77,7 @@ class AppController extends ChangeNotifier {
   bool _started = false;
   bool _disposed = false;
   bool _launchAttempted = false;
+  bool _updateCloseScheduled = false;
 
   void start() {
     if (_started) return;
@@ -383,6 +390,95 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<bool> connectDevice() async {
+    if (!client.isConnected || updatingControls) return false;
+    updatingControls = true;
+    error = null;
+    _notify();
+    try {
+      final result = await client.request('Connect');
+      if (result != true) throw StateError('Core 未连接到设备');
+      await _syncSnapshot();
+      return true;
+    } catch (caught) {
+      error = '连接设备失败：$caught';
+      return false;
+    } finally {
+      updatingControls = false;
+      _notify();
+    }
+  }
+
+  Future<bool> disconnectDevice() async {
+    if (!client.isConnected || updatingControls) return false;
+    updatingControls = true;
+    error = null;
+    _notify();
+    try {
+      await client.request('Disconnect');
+      deviceConnected = false;
+      deviceStatus = patchConfig(deviceStatus, {'connected': false});
+      return true;
+    } catch (caught) {
+      error = '断开设备失败：$caught';
+      return false;
+    } finally {
+      updatingControls = false;
+      _notify();
+    }
+  }
+
+  Future<bool> testTemperatureReading() async {
+    if (!client.isConnected || updatingControls) return false;
+    updatingControls = true;
+    error = null;
+    _notify();
+    try {
+      final result = _jsonMap(
+        await client.request('TestTemperatureReading'),
+        'TestTemperatureReading',
+      );
+      temperature = mergeTemperatureMetadata(temperature, result);
+      return true;
+    } catch (caught) {
+      error = '测试温度读取失败：$caught';
+      return false;
+    } finally {
+      updatingControls = false;
+      _notify();
+    }
+  }
+
+  Future<Object?> restartPawnIO() =>
+      runControlRequest('RestartPawnIO', action: '重启 PawnIO');
+
+  Future<Object?> reinstallPawnIO() =>
+      runControlRequest('ReinstallPawnIO', action: '重装 PawnIO');
+
+  Future<String?> exportDiagnostics(String path) async {
+    final result = await runControlRequest(
+      'ExportDiagnostics',
+      data: {'path': path},
+      action: '导出诊断包',
+    );
+    return result?.toString();
+  }
+
+  Future<bool> downloadAndInstallUpdate(String url) async {
+    final result = await runControlRequest(
+      'DownloadAndInstallUpdate',
+      data: {
+        'url': url,
+        'guiPid': pid,
+        'windowTitle': 'THRM 正在更新',
+        'windowBody': '正在自动安装新版本，请勿关闭此窗口',
+        'windowRestarting': '更新完成，正在重启应用',
+      },
+      action: '启动更新',
+    );
+    return result != null;
+  }
+
   Future<bool> setAutoStart(bool enabled) async {
     if (!client.isConnected || updatingControls) return false;
     updatingControls = true;
@@ -488,10 +584,69 @@ class AppController extends ChangeNotifier {
       case 'device-disconnected':
         deviceConnected = false;
         deviceStatus = {...?deviceStatus, 'connected': false};
+        fanData = null;
+        deviceSettings = null;
+      case 'device-error':
+        error = data?.toString() ?? '设备发生未知错误';
+      case 'device-settings-update':
+        deviceSettings = _optionalMap(data);
+        deviceStatus = {
+          ...?deviceStatus,
+          if (deviceSettings != null) 'deviceSettings': deviceSettings,
+        };
       case 'config-update':
         config = _optionalMap(data) ?? config;
+      case 'hotkey-triggered':
+        final payload = _optionalMap(data);
+        final message = payload?['message']?.toString() ?? '';
+        if (message.isNotEmpty) {
+          _setNotice(message, payload?['success'] != false);
+        }
+      case 'legion-power-mode-update':
+        final payload = _optionalMap(data);
+        final mode = payload?['mode']?.toString() ?? '';
+        if (mode.isNotEmpty) _setNotice('Legion 性能模式已切换为 $mode', true);
+      case 'legion-fnq-support-update':
+        final payload = _optionalMap(data);
+        if (payload != null) {
+          config = patchConfig(config, {'legionFnQSupport': payload});
+        }
+      case 'timeline-event':
+        final timelineEvent = readTimelineEvent(data);
+        if (timelineEvent != null) {
+          temperatureHistory = (
+            enabled: temperatureHistory.enabled,
+            sampleIntervalSeconds: temperatureHistory.sampleIntervalSeconds,
+            retentionHours: temperatureHistory.retentionHours,
+            points: temperatureHistory.points,
+            events: mergeTimelineEvents(
+              temperatureHistory.events,
+              timelineEvent,
+            ),
+          );
+        }
+      case 'update-download-progress':
+        updateProgress = _optionalMap(data);
+        if (updateProgress?['stage'] == 'installing' &&
+            !_updateCloseScheduled &&
+            onQuit != null) {
+          _updateCloseScheduled = true;
+          unawaited(() async {
+            await Future<void>.delayed(const Duration(milliseconds: 800));
+            await onQuit!();
+          }());
+        }
+      case 'show-window':
+        if (onShowWindow != null) unawaited(onShowWindow!());
+      case 'quit':
+        if (onQuit != null) unawaited(onQuit!());
     }
     _notify();
+  }
+
+  void _setNotice(String message, bool success) {
+    lastNotice = {'message': message, 'success': success};
+    noticeVersion++;
   }
 
   Map<String, dynamic> _jsonMap(Object? value, String request) {
@@ -571,9 +726,14 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _disposed = true;
-    unawaited(_eventSubscription?.cancel());
-    unawaited(client.dispose());
+    unawaited(stop());
     super.dispose();
+  }
+
+  Future<void> stop() async {
+    if (_disposed) return;
+    _disposed = true;
+    await _eventSubscription?.cancel();
+    await client.dispose();
   }
 }

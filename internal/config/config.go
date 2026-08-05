@@ -195,10 +195,14 @@ func applyMissingThemeDefaults(cfg *types.AppConfig, rawConfig map[string]json.R
 	defaultThemeMode := types.ThemeModeSystem
 	if _, ok := rawConfig["themeMode"]; !ok {
 		cfg.ThemeMode = defaultThemeMode
-		return
+	} else {
+		cfg.ThemeMode = types.NormalizeThemeMode(cfg.ThemeMode)
 	}
-
-	cfg.ThemeMode = types.NormalizeThemeMode(cfg.ThemeMode)
+	if _, ok := rawConfig["locale"]; !ok {
+		cfg.Locale = types.LocaleZhCN
+	} else {
+		cfg.Locale = types.NormalizeLocale(cfg.Locale)
+	}
 }
 
 func applyMissingTemperatureDefaults(cfg *types.AppConfig, rawConfig map[string]json.RawMessage) {

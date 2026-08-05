@@ -124,6 +124,48 @@ void main() {
     expect(controller.config?['unknown'], {'preserved': true});
   });
 
+  test('recovery controls call Core and refresh local state', () async {
+    final client = _RecordingIpcClient({
+      'Connect': true,
+      'GetConfig': {'unknown': true},
+      'GetDeviceStatus': {
+        'connected': true,
+        'temperature': {'controlTemp': 45, 'bridgeOk': true},
+      },
+      'GetTemperatureHistory': const <String, dynamic>{},
+      'TestTemperatureReading': {
+        'controlTemp': 51,
+        'bridgeOk': true,
+        'cpuModel': 'Test CPU',
+      },
+      'RestartPawnIO': {'success': true},
+      'ReinstallPawnIO': {'success': true},
+    });
+    final controller = AppController(client: client);
+    addTearDown(controller.dispose);
+
+    expect(await controller.connectDevice(), isTrue);
+    expect(controller.deviceConnected, isTrue);
+    expect(controller.temperature?['controlTemp'], 45);
+    expect(await controller.disconnectDevice(), isTrue);
+    expect(controller.deviceConnected, isFalse);
+    expect(await controller.testTemperatureReading(), isTrue);
+    expect(controller.temperature?['controlTemp'], 51);
+    expect(controller.temperature?['cpuModel'], 'Test CPU');
+    expect(await controller.restartPawnIO(), {'success': true});
+    expect(await controller.reinstallPawnIO(), {'success': true});
+    expect(client.requests.map((request) => request.type), [
+      'Connect',
+      'GetConfig',
+      'GetDeviceStatus',
+      'GetTemperatureHistory',
+      'Disconnect',
+      'TestTemperatureReading',
+      'RestartPawnIO',
+      'ReinstallPawnIO',
+    ]);
+  });
+
   test('fan curve parser enforces the Core ordering contract', () {
     expect(
       app.readFanCurve([
@@ -350,12 +392,14 @@ void main() {
       _fluentTestApp(
         app.ThrmShell(
           controller: controller,
-          fetchLatestRelease: () async {
+          fetchLatestRelease: (_) async {
             releaseChecks++;
             return (
               tag: 'v0.1.0',
               url: 'https://github.com/TIANLI0/THRM/releases/latest',
               body: '',
+              installerUrl: '',
+              prerelease: false,
             );
           },
         ),
@@ -484,7 +528,9 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1000, 700));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final client = _RecordingIpcClient();
+    final client = _RecordingIpcClient({
+      'TestTemperatureReading': {'controlTemp': 51, 'bridgeOk': true},
+    });
     final controller = AppController(client: client)
       ..connection = CoreConnection.connected
       ..deviceConnected = true
@@ -523,6 +569,69 @@ void main() {
         ),
       ),
     );
+    expect(find.text('连接与恢复'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('control-device-disconnect')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('control-temperature-test')),
+      findsOneWidget,
+    );
+    if (Platform.isWindows) {
+      expect(
+        find.byKey(const ValueKey('control-pawnio-restart')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('control-pawnio-reinstall')),
+        findsOneWidget,
+      );
+    }
+    final temperatureTest = find.byKey(
+      const ValueKey('control-temperature-test'),
+    );
+    await tester.tap(temperatureTest);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.text('温度读取完成'), findsOneWidget);
+    final notice = find.ancestor(
+      of: find.text('温度读取完成'),
+      matching: find.byType(fluent.InfoBar),
+    );
+    expect(tester.widget<fluent.InfoBar>(notice).onClose, isNull);
+    expect(
+      find.descendant(of: notice, matching: find.byType(fluent.IconButton)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: notice,
+        matching: find.byIcon(fluent.FluentIcons.completed_solid),
+      ),
+      findsOneWidget,
+    );
+    final noticeSize = tester.getSize(notice);
+    expect(noticeSize, isNot(Size.zero));
+    await tester.pump(const Duration(milliseconds: 125));
+    expect(tester.getSize(notice), noticeSize);
+    await tester.pump(const Duration(milliseconds: 125));
+    expect(tester.getSize(notice), noticeSize);
+    final fade = find.ancestor(
+      of: find.text('温度读取完成'),
+      matching: find.byType(FadeTransition),
+    );
+    final fadeOpacity = tester.widget<FadeTransition>(fade).opacity;
+    await tester.pump(const Duration(milliseconds: 2700));
+    expect(find.text('温度读取完成'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('温度读取完成'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 125));
+    expect(fadeOpacity.value, inExclusiveRange(0, 1));
+    expect(find.text('温度读取完成'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 125));
+    expect(find.text('温度读取完成'), findsNothing);
+    client.requests.clear();
     Future<void> scrollTo(Finder finder) async {
       for (var index = 0; index < 20 && finder.evaluate().isEmpty; index++) {
         final position = scrollController.position;
@@ -546,6 +655,11 @@ void main() {
       tester.getSize(temperatureSource).width,
     );
     expect(
+      tester.getSize(sensors).height,
+      tester.getSize(temperatureSource).height,
+    );
+    expect(tester.widget<fluent.DropDownButton>(sensors).disabled, isFalse);
+    expect(
       tester.widget<fluent.ComboBox<String>>(temperatureSource).iconSize,
       12,
     );
@@ -554,6 +668,21 @@ void main() {
       matching: find.byType(fluent.WindowsIcon),
     );
     expect(sensorArrow, findsOneWidget);
+    final comboArrow = find.descendant(
+      of: temperatureSource,
+      matching: find.byType(fluent.WindowsIcon),
+    );
+    final sensorText = find.descendant(
+      of: sensors,
+      matching: find.text('自动选择'),
+    );
+    final comboText = find.descendant(
+      of: temperatureSource,
+      matching: find.text('CPU / GPU 最高温'),
+    );
+    expect(tester.getRect(sensorArrow).right, tester.getRect(comboArrow).right);
+    expect(tester.getRect(sensorText).left, tester.getRect(comboText).left);
+    expect(tester.widget<Text>(sensorText).textAlign, TextAlign.start);
     expect(tester.widget<fluent.WindowsIcon>(sensorArrow).size, 12);
     final gpuSensor = find.descendant(
       of: find.widgetWithText(fluent.InfoLabel, 'GPU 传感器'),

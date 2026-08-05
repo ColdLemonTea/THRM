@@ -110,6 +110,8 @@ const (
 	ReqSendDeviceDebugCommand RequestType = "SendDeviceDebugCommand"
 	ReqGetDeviceDebugFrames   RequestType = "GetDeviceDebugFrames"
 	ReqUpdateGuiResponseTime  RequestType = "UpdateGuiResponseTime"
+	ReqExportDiagnostics      RequestType = "ExportDiagnostics"
+	ReqDownloadInstallUpdate  RequestType = "DownloadAndInstallUpdate"
 
 	// 系统相关
 	ReqPing              RequestType = "Ping"
@@ -166,6 +168,7 @@ const (
 	EventHealthPing               = "health-ping"
 	EventHeartbeat                = "heartbeat"
 	EventTimelineEvent            = "timeline-event"
+	EventUpdateDownloadProgress   = "update-download-progress"
 )
 
 // Server IPC 服务器

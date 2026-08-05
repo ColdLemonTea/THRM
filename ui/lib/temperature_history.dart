@@ -11,11 +11,14 @@ typedef TemperatureHistoryPoint = ({
   int gpuFanRpm,
 });
 
+typedef TimelineEvent = ({int timestamp, String type, String labelKey});
+
 typedef TemperatureHistorySnapshot = ({
   bool enabled,
   int sampleIntervalSeconds,
   int retentionHours,
   List<TemperatureHistoryPoint> points,
+  List<TimelineEvent> events,
 });
 
 const TemperatureHistorySnapshot emptyTemperatureHistorySnapshot = (
@@ -23,6 +26,7 @@ const TemperatureHistorySnapshot emptyTemperatureHistorySnapshot = (
   sampleIntervalSeconds: 5,
   retentionHours: 1,
   points: <TemperatureHistoryPoint>[],
+  events: <TimelineEvent>[],
 );
 
 TemperatureHistorySnapshot readTemperatureHistorySnapshot(Object? raw) {
@@ -37,6 +41,13 @@ TemperatureHistorySnapshot readTemperatureHistorySnapshot(Object? raw) {
       if (point != null) points.add(point);
     }
   }
+  final events = <TimelineEvent>[];
+  if (raw['events'] case final List rawEvents) {
+    for (final rawEvent in rawEvents) {
+      final event = readTimelineEvent(rawEvent);
+      if (event != null) events.add(event);
+    }
+  }
   return (
     enabled: raw['enabled'] == true,
     sampleIntervalSeconds: sampleInterval == 0 ? 5 : sampleInterval,
@@ -46,6 +57,41 @@ TemperatureHistorySnapshot readTemperatureHistorySnapshot(Object? raw) {
       retentionHours: retention,
       sampleIntervalSeconds: sampleInterval == 0 ? 5 : sampleInterval,
     ),
+    events: mergeTimelineEvents(events),
+  );
+}
+
+TimelineEvent? readTimelineEvent(Object? raw) {
+  if (raw is! Map) return null;
+  var timestamp = _positiveInt(raw['timestamp']);
+  if (timestamp > 0 && timestamp < 1000000000000) timestamp *= 1000;
+  final labelKey = raw['labelKey']?.toString() ?? '';
+  if (timestamp == 0 || labelKey.isEmpty) return null;
+  final type = raw['type']?.toString() ?? 'mode';
+  return (
+    timestamp: timestamp,
+    type: const {'mode', 'disconnect', 'resume', 'profile'}.contains(type)
+        ? type
+        : 'mode',
+    labelKey: labelKey,
+  );
+}
+
+List<TimelineEvent> mergeTimelineEvents(
+  List<TimelineEvent> current, [
+  TimelineEvent? incoming,
+]) {
+  final byId = <String, TimelineEvent>{
+    for (final event in current)
+      '${event.timestamp}|${event.type}|${event.labelKey}': event,
+  };
+  if (incoming case final event?) {
+    byId['${event.timestamp}|${event.type}|${event.labelKey}'] = event;
+  }
+  final events = byId.values.toList()
+    ..sort((left, right) => left.timestamp.compareTo(right.timestamp));
+  return List.unmodifiable(
+    events.length > 240 ? events.sublist(events.length - 240) : events,
   );
 }
 
@@ -97,6 +143,7 @@ TemperatureHistorySnapshot appendTemperatureHistoryPoint(
             retentionHours: snapshot.retentionHours,
             sampleIntervalSeconds: snapshot.sampleIntervalSeconds,
           ),
+    events: snapshot.events,
   );
 }
 

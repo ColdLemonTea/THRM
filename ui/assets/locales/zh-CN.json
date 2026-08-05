@@ -1,0 +1,942 @@
+{
+  "connectionRecovery": {
+    "title": "连接向导",
+    "temperatureTitle": "温度监控需要恢复",
+    "steps": {
+      "connection": "确认设备已供电；BS1 由 THRM 自动连接，BS2/BS3 系列需要您先在系统中手动连接蓝牙。",
+      "release": "关闭可能占用传感器或设备连接的其他硬件工具。",
+      "diagnostics": "重试后仍然失败时，请导出诊断包并提交反馈。"
+    },
+    "actions": {
+      "retry": "重新连接",
+      "temperatureTest": "温度自检",
+      "exportDiagnostics": "导出诊断包"
+    },
+    "toasts": {
+      "retryStarted": "已重新发起设备连接",
+      "recoveryFailed": "恢复失败",
+      "temperatureRecovered": "温度源已恢复：{{temperature}}°C",
+      "temperatureUnavailable": "仍未获得有效温度",
+      "temperatureUnavailableDescription": "请关闭其他硬件监控工具后重试，应用会保持安全转速。",
+      "temperatureTestFailed": "温度自检失败",
+      "diagnosticsExported": "诊断包已导出",
+      "diagnosticsExportFailed": "诊断包导出失败"
+    }
+  },
+  "common": {
+    "appName": "THRM",
+    "metaDescription": "面向飞智笔记本压风散热器系列设备的第三方驱动与控制工具",
+    "language": "语言",
+    "languages": {
+      "zh-CN": "简体中文",
+      "en-US": "English",
+      "ja-JP": "日本語"
+    },
+    "actions": {
+      "apply": "应用",
+      "back": "返回",
+      "cancel": "取消",
+      "close": "关闭",
+      "confirm": "确认",
+      "copy": "复制",
+      "delete": "删除",
+      "done": "完成",
+      "export": "导出",
+      "import": "导入",
+      "refresh": "刷新",
+      "retry": "重试",
+      "save": "保存"
+    }
+  },
+  "ui": {
+    "select": {
+      "placeholder": "请选择"
+    },
+    "toggle": {
+      "defaultAriaLabel": "切换"
+    }
+  },
+  "fatalError": {
+    "title": "应用初始化失败",
+    "retry": "重试"
+  },
+  "appShell": {
+    "tabs": {
+      "status": "状态",
+      "curve": "曲线",
+      "control": "设置",
+      "about": "关于"
+    },
+    "status": {
+      "connected": "已连接",
+      "offline": "离线",
+      "smartControl": "智能变频",
+      "manualMode": "手动模式"
+    },
+    "titleBar": {
+      "minimize": "最小化",
+      "maximize": "最大化",
+      "restore": "还原",
+      "close": "关闭"
+    },
+    "repository": {
+      "openAria": "打开 {{name}} GitHub 仓库",
+      "openTooltip": "打开 GitHub 仓库"
+    },
+    "sidebar": {
+      "expand": "展开侧边栏",
+      "collapse": "收起侧边栏"
+    },
+    "bridgeWarning": {
+      "closeAria": "关闭告警"
+    }
+  },
+  "store": {
+    "bridgeWarning": {
+      "default": "CPU/GPU 温度读取失败。CPU 温度依赖 PawnIO 驱动读取，可点击“重装 PawnIO”后重启 THRM；若仍不可用，请关闭其它硬件监控工具后重试。"
+    },
+    "coreService": {
+      "unavailable": "核心服务不可用。请检查 THRM Core.exe 是否被安全软件隔离，或重新安装/恢复 Core 后重试。",
+      "unavailableWithDetail": "核心服务不可用：{{detail}}"
+    },
+    "errors": {
+      "initializeApp": "应用初始化失败",
+      "connectDevice": "设备连接失败",
+      "saveConfig": "配置保存失败"
+    },
+    "hotkey": {
+      "successTitle": "功能变动",
+      "failureTitle": "操作失败"
+    },
+    "legionFnQ": {
+      "modeChangedTitle": "拯救者性能模式变化",
+      "modeDescription": "当前模式：{{mode}}"
+    },
+    "legionModes": {
+      "Quiet": "安静模式",
+      "Balance": "均衡模式",
+      "Performance": "野兽模式",
+      "Extreme": "超能模式",
+      "GodMode": "自定义模式"
+    }
+  },
+  "deviceStatus": {
+    "tempStatus": {
+      "overheat": "过热",
+      "high": "偏高",
+      "normal": "正常",
+      "good": "良好"
+    },
+    "tempGauge": {
+      "loading": "读取中…",
+      "monitoringDisabled": "已停用监测"
+    },
+    "fan": {
+      "targetSummary": "目标 {{target}} · {{gear}}"
+    },
+    "chart": {
+      "fanCurve": "风扇转速曲线",
+      "openCurve": "曲线页"
+    },
+    "history": {
+      "title": "温度与风扇历史",
+      "details": "详情",
+      "waiting": "等待温度数据",
+      "disabled": "后台记录已关闭，当前展示本次打开后的临时历史。",
+      "singleSampleCore": "已记录 1 条后台样本，等待更多数据。",
+      "singleSampleSession": "已记录 1 条会话样本，等待更多数据。",
+      "source": {
+        "core": "后台记录",
+        "session": "本次打开"
+      }
+    },
+    "device": {
+      "unknown": "未知设备",
+      "imageAlt": "{{model}} 设备图"
+    },
+    "connectStatus": {
+      "connected": "已连接",
+      "offline": "离线"
+    },
+    "mode": {
+      "smartControl": "智能控制",
+      "fixedSpeed": "固定转速",
+      "manualStrategy": "手动策略",
+      "smartDescription": "根据实时温度自动调节转速",
+      "fixedDescription": "当前固定为 {{rpm}} RPM",
+      "manualDescription": "可在设置页调整模式与参数",
+      "withProfile": "{{mode}}（{{profile}}）"
+    },
+    "bridgeState": {
+      "runningOwned": "独占运行",
+      "attached": "附着共享实例",
+      "starting": "启动中",
+      "degraded": "降级",
+      "failed": "失败",
+      "stopping": "停止中",
+      "stopped": "已停止",
+      "notStarted": "未启动"
+    },
+    "maxRpmHint": {
+      "bs1": "BS1 最高可达超频挡 3000 RPM。",
+      "max4000": "当前已解锁超频上限，最高可达 4000 RPM。",
+      "max3300": "当前最高为强劲档，最高可达 3300 RPM，使用 PD 27W 充电头以解锁上限。",
+      "max2760": "当前最高为标准档，最高可达 2760 RPM，使用 PD 27W 充电头以解锁上限。",
+      "unknownCode": "设备上报了未映射的最高挡位编码：{{code}}",
+      "waiting": "等待设备上报最高转速能力。"
+    },
+    "hero": {
+      "modeLine": "{{mode}} · {{description}}",
+      "waitingBluetooth": "等待蓝牙连接…",
+      "coreUnavailable": "核心服务不可用，请先恢复后台服务"
+    },
+    "actions": {
+      "smartControl": "智能变频",
+      "disconnect": "断开",
+      "connect": "连接",
+      "connectDevice": "连接设备"
+    },
+    "metrics": {
+      "cpuTemperature": "CPU 温度",
+      "gpuTemperature": "GPU 温度",
+      "fanRpm": "风扇转速",
+      "laptopFan": "本机风扇转速",
+      "laptopFanTooltip": "这是笔记本内置风扇的转速"
+    },
+    "disconnected": {
+      "title": "设备未连接",
+      "description": "请将散热器通过蓝牙连接到电脑"
+    },
+    "bridgeWarning": {
+      "default": "温度桥接程序读取失败，可重新初始化温度监控后重试。",
+      "stateLine": "桥接状态：{{state}}",
+      "ownsProcess": "当前实例已接管进程",
+      "sharedProcess": "当前实例复用共享进程",
+      "transportLine": "通信方式：{{transport}}",
+      "pipeLine": "命名管道：{{pipe}}",
+      "diagnosticsLine": "诊断信息：{{message}}",
+      "reinitialize": "重新初始化温度监控",
+      "reinstallPawnIo": "重装 PawnIO",
+      "reinstallPawnIoRunning": "正在重装 PawnIO…"
+    },
+    "controlProtection": "控制与保护",
+    "stats": {
+      "controlMode": "控制模式",
+      "maxRpm": "最高转速",
+      "maxRpmHintAria": "最高转速提示",
+      "workMode": "工作模式",
+      "tempStatus": "温度状态",
+      "cpuPower": "CPU 功耗",
+      "gpuPower": "GPU 功耗"
+    }
+  },
+  "manualGear": {
+    "gears": {
+      "quiet": "静音",
+      "standard": "标准",
+      "strong": "强劲",
+      "overclock": "超频"
+    },
+    "levels": {
+      "low": "低",
+      "medium": "中",
+      "high": "高"
+    }
+  },
+  "fanCurveProfileSelect": {
+    "placeholder": "选择曲线方案",
+    "empty": "暂无曲线方案",
+    "addNewAria": "新增曲线方案",
+    "addNewTooltip": "新增曲线方案",
+    "manageAria": "管理曲线方案",
+    "manageTooltip": "管理曲线方案"
+  },
+  "aboutPanel": {
+    "title": "关于 {{name}}",
+    "description": "{{name}} 是一款面向飞智笔记本压风散热器系列设备的第三方驱动与控制工具。",
+    "images": {
+      "logoAlt": "{{name}} 标志",
+      "wordmarkAlt": "{{name}} 字标",
+      "avatarAlt": "Tianli 头像",
+      "supportQrAlt": "{{label}} 二维码"
+    },
+    "version": {
+      "current": "当前 {{version}}",
+      "latest": "最新 {{version}}",
+      "copyTooltip": "点击复制版本号",
+      "copied": "已复制：{{version}}",
+      "copyFailed": "复制失败",
+      "checkingShort": "检查中…",
+      "checkingButton": "检查中",
+      "checkUpdate": "检查更新",
+      "channelStable": "正式版",
+      "channelPrerelease": "预发布",
+      "prereleaseBadge": "Pre-release",
+      "noPrereleaseFound": "当前未找到可用的预发布版本。",
+      "openReleasePage": "打开发布页",
+      "updatable": "可更新",
+      "checkFailed": "检查更新失败，请稍后重试",
+      "newVersionFound": "发现新版本 {{version}}",
+      "emptyReleaseNotes": "暂无日志内容，或本次获取失败。",
+      "downloadAndInstall": "下载并安装",
+      "downloading": "下载中 {{percent}}%",
+      "installing": "正在安装…",
+      "installStarted": "即将重启",
+      "autoInstallHint": "将下载并全自动静默安装，完成后自动重启（仅需一次 UAC 授权，无需手动确认安装）。",
+      "installingHint": "正在安装，完成后会自动重启新版本…",
+      "installFailed": "下载或安装更新失败：{{error}}",
+      "noInstallerHint": "本次发布未提供可自动安装的安装包，请前往发布页手动下载。",
+      "floatDownloadingTitle": "正在下载更新",
+      "floatInstallingTitle": "正在安装更新",
+      "floatDoneTitle": "即将开始安装",
+      "floatErrorTitle": "更新失败",
+      "floatRetry": "重试",
+      "floatDoneHint": "本程序即将关闭并自动安装，更新窗口会展示进度，完成后自动重启新版本。",
+      "updaterWindowTitle": "THRM 正在更新",
+      "updaterWindowBody": "正在自动安装新版本，请勿关闭此窗口",
+      "updaterWindowRestarting": "更新完成，正在重启应用"
+    },
+    "contact": {
+      "title": "开发者与联系",
+      "tagline": "一个不知名开发者",
+      "email": "邮箱",
+      "feedbackGroup": "反馈群",
+      "feedbackGroupEntry": "QQ 群入口",
+      "repository": "开源仓库",
+      "repositoryPlatform": "GitHub"
+    },
+    "faq": {
+      "title": "常见问题解答",
+      "items": [
+        {
+          "question": "为什么 CPU 温度会显示为 0℃？",
+          "answer": "当 CPU 温度显示为 0℃ 时，通常表示 PawnIO 通讯未能正常建立。建议重新安装 PawnIO 相关组件，并在安装完成后重启计算机，再重新启动 THRM 进行确认。"
+        },
+        {
+          "question": "当前支持哪些设备？",
+          "answer": "目前支持的设备型号包括飞智 BS1、BS2、BS2PRO、BS3 与 BS3PRO。"
+        },
+        {
+          "question": "蓝牙扫描不到设备时应如何处理？",
+          "answer": "若蓝牙扫描列表中未发现设备，建议长按散热器按键以重置蓝牙广播状态；如仍无法恢复，建议联系官方客服进一步协助处理。"
+        }
+      ]
+    },
+    "sponsor": {
+      "button": "赞助",
+      "title": "赞助支持",
+      "pinned": "已固定",
+      "methods": {
+        "alipay": "支付宝",
+        "wechat": "微信"
+      }
+    },
+    "credits": {
+      "title": "鸣谢",
+      "description": "感谢每一位贡献代码的开发者，以及支持本项目的赞助者。",
+      "loading": "正在加载鸣谢清单…",
+      "error": "鸣谢清单加载失败，请稍后再试。",
+      "contributorsTitle": "代码贡献者",
+      "contributorsEmpty": "暂无贡献者记录。",
+      "sponsorsTitle": "赞助者",
+      "sponsorsEmpty": "暂无赞助者记录。",
+      "authorBadge": "作者",
+      "anonymous": "匿名",
+      "thanks": "感谢每一份支持，THRM 因你们而更好 ❤"
+    }
+  },
+  "fanCurve": {
+    "title": "风扇曲线",
+    "badges": {
+      "unsaved": "未保存",
+      "editing": "编辑中"
+    },
+    "actions": {
+      "smartControl": "智能变频",
+      "reset": "重置"
+    },
+    "chart": {
+      "currentTemperature": "当前 {{temperature}}°C",
+      "tooltipDescriptionAria": "{{label}}说明",
+      "axes": {
+        "temperature": "温度 (°C)",
+        "rpm": "转速 (RPM)"
+      },
+      "series": {
+        "base": "基础曲线",
+        "learned": "学习曲线"
+      },
+      "temperatureLabel": "温度: {{temperature}}°C"
+    },
+    "manualGear": {
+      "title": "手动挡位",
+      "bs1SliderHint": "4 控制点滑块",
+      "defaultSliderHint": "12 控制点滑块",
+      "pointTooltip": "{{gear}} {{level}} · {{rpm}} RPM",
+      "pointIndex": "{{index}}档",
+      "customize": "自定义转速",
+      "editTitle": "自定义挡位转速",
+      "editHint": "12 个挡位从低到高需依次递增，上限 {{max}} RPM",
+      "restoreDefault": "恢复默认",
+      "rpmSaved": "挡位转速已保存",
+      "rpmSaveFailed": "保存挡位转速失败: {{error}}"
+    },
+    "learning": {
+      "title": "自适应学习",
+      "paused": "已暂停",
+      "requiresLearning": "需开启自适应学习",
+      "description": "长时间运行后，自动微调每个温度点的目标转速，使实际温度更贴近曲线设定值。学到的偏移随时可一键重置。",
+      "toggleAria": "切换自适应学习",
+      "biasTitle": "学习倾向",
+      "targetTitle": "目标温度",
+      "targetDescription": "学习模式会尽量把稳态温度收敛到这个上限附近。调低更偏散热，调高更偏静音。",
+      "offsetTitle": "学习偏移",
+      "offsetDescription": "当前学习曲线相对基础曲线的主要 RPM 修正点。",
+      "reset": "重置学习",
+      "noOffsets": "暂无学习偏移",
+      "noiseTestTitle": "噪音实测校准",
+      "noiseTestDescription": "用麦克风实测各转速的真实噪音，学习模式会优先在「降速最省噪」的区间做静音优化。",
+      "noiseTestButton": "噪音测试",
+      "noiseTestCalibrated": "已校准 {{date}}",
+      "biasOptions": {
+        "balanced": {
+          "label": "均衡",
+          "description": "允许学习曲线在基础曲线上下微调。"
+        },
+        "cooling": {
+          "label": "散热优先",
+          "description": "只允许学习增加转速，避免待机温度被学高。"
+        },
+        "quiet": {
+          "label": "静音优先",
+          "description": "只允许学习降低转速，避免自动把风扇拉高。"
+        }
+      },
+      "predictiveTitle": "提前升速",
+      "predictiveDescription": "CPU/GPU 功耗突增、温度正在上升时，按预计温度提前升速，不等实测温度真的越过曲线点。只提前升速、不提前降速；学习偏移仍按实测温度计算。",
+      "laptopGuardTitle": "笔记本风扇高转时缓慢降速",
+      "laptopGuardDescription": "笔记本自身风扇仍接近最近的最高转速时，散热器每个采样周期最多降 60 RPM，避免温度一掉就急降速、温度回升后又要升速的来回摆动。仅在能读到笔记本风扇转速的机型上可用。",
+      "laptopGuardToggleAria": "切换笔记本风扇高转时缓慢降速",
+      "predictiveToggleAria": "切换提前升速"
+    },
+    "noiseTest": {
+      "title": "风扇噪音测试",
+      "description": "通过麦克风实测不同转速下的噪音水平，生成噪音档案用于优化学习模式。",
+      "intro": {
+        "envTitle": "测试前请确保环境安静",
+        "point1": "关闭音乐、视频、空调等持续声源，测试期间不要说话或敲键盘。",
+        "point2": "把带麦克风的设备放在距离散热器约 20-30 cm 处，不要遮挡麦克风。",
+        "point3": "如使用笔记本内置麦克风，测试期间不要移动设备。",
+        "point4": "测得的是相对噪音（以最安静档位为基准），无需专业声学校准。",
+        "sweepNotice": "测试将把风扇从 {{min}} RPM 逐级提升到 {{max}} RPM，共 {{steps}} 个测量点，约需 2-3 分钟。期间风扇会明显变响，测试结束后自动恢复原有设置。",
+        "next": "选择麦克风"
+      },
+      "setup": {
+        "micTitle": "选择麦克风",
+        "refresh": "刷新",
+        "noMicFound": "未找到可用麦克风",
+        "permissionError": "无法访问麦克风，请检查系统隐私设置中的麦克风权限（{{error}}）",
+        "levelTitle": "实时环境声级",
+        "stable": "环境稳定",
+        "unstable": "环境波动大",
+        "stableHint": "背景声级稳定，可以开始测试。",
+        "unstableHint": "检测到声级波动，请保持安静（不要说话、关闭声源）后再开始。",
+        "deviceRequired": "设备未连接，无法控制风扇转速。",
+        "start": "开始测试"
+      },
+      "running": {
+        "preparing": "正在准备…",
+        "settling": "等待风扇稳定在 {{rpm}} RPM…",
+        "sampling": "正在测量 {{rpm}} RPM 噪音…",
+        "keepQuiet": "测试进行中，请保持环境安静，不要说话或移动麦克风。",
+        "cancel": "取消测试"
+      },
+      "done": {
+        "riseTitle": "全程噪音上升",
+        "kneeTitle": "噪音拐点",
+        "kneeValue": "约 {{rpm}} RPM 起噪音明显上升",
+        "noKnee": "未检测到明显拐点",
+        "resonance": "检测到 {{rpm}} RPM 附近存在共振峰（高出趋势 {{db}} dB），建议设置 {{min}}-{{max}} RPM 避噪区间。",
+        "lowConfidence": "全程噪音变化过小，测量区分度不足。请把麦克风移近散热器、确认环境安静后重测；本次结果不建议写入学习档案。",
+        "applyProfile": "写入学习模式噪音档案",
+        "profileApplied": "噪音档案已写入",
+        "applyAvoidance": "设置避噪区间 {{min}}-{{max}} RPM",
+        "avoidanceApplied": "避噪区间已设置",
+        "retest": "重新测试",
+        "close": "完成"
+      },
+      "chart": {
+        "series": "相对噪音"
+      },
+      "toast": {
+        "cancelled": "噪音测试已取消，风扇设置已恢复",
+        "failed": "噪音测试失败",
+        "restoreFailed": "恢复风扇设置失败，请手动检查转速模式",
+        "profileSaved": "噪音档案已保存，学习模式将参考实测噪音进行静音优化",
+        "avoidanceSaved": "已启用 {{min}}-{{max}} RPM 避噪区间",
+        "applyFailed": "保存失败"
+      }
+    },
+    "avoidance": {
+      "title": "避噪转速区间",
+      "badge": "已启用",
+      "description": "当自动控温计算出的目标转速落入噪音敏感区间时，自动跳到区间外，减少轴噪概率。",
+      "toggleAria": "切换避噪转速区间",
+      "minTitle": "区间起点",
+      "minDescription": "噪音区间的较低转速边界。",
+      "maxTitle": "区间终点",
+      "maxDescription": "噪音区间的较高转速边界。",
+      "marginTitle": "避让余量",
+      "marginDescription": "落入区间时，额外向外跳开的 RPM 余量。",
+      "bypassTitle": "高温旁路",
+      "bypassDescription": "温度达到该阈值时临时忽略避让，优先散热。",
+      "summary": "避让区间 {{min}} - {{max}} RPM，余量 {{margin}} RPM",
+      "activeHint": "当前目标 {{rpm}} RPM 处于敏感区间，系统会自动避让",
+      "autoOnlyHint": "仅在智能变频模式下生效",
+      "revealButton": "调参",
+      "hiddenHint": "该功能已默认隐藏。以下均为通用默认值，需要按你的设备实测调参；如果不清楚需求请勿开启。",
+      "confirmTitle": "开启避噪转速区间调参",
+      "confirmBody1": "以下参数均为通用默认值，需要结合你设备的实测噪音进行调参才有意义。",
+      "confirmBody2": "如果不清楚具体需求，请不要开启，以免影响正常散热。",
+      "confirmAccept": "我已了解，展开设置"
+    },
+    "schedule": {
+      "title": "分时曲线",
+      "description": "按时间段自动切换不同的曲线方案，适合白天性能、夜间静音等场景。",
+      "toggleAria": "切换分时曲线",
+      "currentBadge": "当前命中",
+      "currentRule": "当前规则：{{name}}",
+      "noRuleMatched": "当前时间没有命中任何规则",
+      "autoControlHint": "仅切换活动曲线方案，不会强制打开智能变频",
+      "addRule": "新增规则",
+      "empty": "还没有分时规则，点击右上角新增。",
+      "newRuleName": "新时段",
+      "defaultRuleName": "时段 {{index}}",
+      "ruleName": "规则名称",
+      "ruleNamePlaceholder": "例如：深夜静音",
+      "profileTitle": "曲线方案",
+      "startTitle": "开始时间",
+      "endTitle": "结束时间",
+      "daysTitle": "生效日期",
+      "ruleToggleAria": "切换时段规则",
+      "days": {
+        "mon": "一",
+        "tue": "二",
+        "wed": "三",
+        "thu": "四",
+        "fri": "五",
+        "sat": "六",
+        "sun": "日"
+      }
+    },
+    "hints": {
+      "dragPoint": "拖拽蓝色圆点调整转速",
+      "curveLegend": "实线: 基础 · 虚线: 学习"
+    },
+    "history": {
+      "detailsTitle": "温度与风扇历史详情",
+      "detailsDescription": "曲线页保留可配置时长（默认 1 小时）的温度、功耗与风扇历史，便于对照当前曲线与负载变化。",
+      "saving": "保存中",
+      "backgroundRecording": "后台记录",
+      "emptyEnabled": "后台记录已开启，等待更多温度与风扇样本。",
+      "emptyDisabled": "后台记录当前已关闭，可在本页开启。",
+      "recentTrend": "最近趋势",
+      "resetZoom": "重置缩放",
+      "zoomHint": "在图表上拖拽可框选时间范围",
+      "powerTrend": "功耗趋势",
+      "waitingMoreSamples": "已记录 1 条样本，等待更多数据后展示趋势图。",
+      "retention": {
+        "label": "保留",
+        "hours": "{{count}} 小时"
+      },
+      "timeline": {
+        "deviceConnected": "设备已连接",
+        "deviceDisconnected": "设备断开",
+        "smartControlOn": "切换为智能控温",
+        "smartControlOff": "退出智能控温",
+        "curveSwitched": "切换风扇曲线",
+        "resumeFromSleep": "系统睡眠唤醒",
+        "systemSuspended": "系统进入睡眠",
+        "coreStarted": "核心服务启动"
+      },
+      "series": {
+        "cpu": "CPU",
+        "gpu": "GPU",
+        "fan": "风扇 RPM",
+        "cpuFan": "本机 CPU 风扇",
+        "gpuFan": "本机 GPU 风扇",
+        "cpuPower": "CPU 功耗",
+        "gpuPower": "GPU 功耗"
+      },
+      "duration": {
+        "ltOneMinute": "< 1 分钟",
+        "minutes": "{{count}} 分钟",
+        "hoursAndMinutes": "{{hours}} 小时 {{minutes}} 分钟",
+        "hours": "{{hours}} 小时"
+      },
+      "summary": {
+        "cpuPeak": "CPU 峰值",
+        "gpuPeak": "GPU 峰值",
+        "cpuPowerPeak": "CPU 功耗峰值",
+        "gpuPowerPeak": "GPU 功耗峰值",
+        "fanPeak": "风扇峰值",
+        "averageTemperature": "平均 {{value}}°C",
+        "averagePower": "平均 {{value}} W",
+        "averageFan": "平均 {{value}} RPM",
+        "noCpuTemperature": "暂无 CPU 温度",
+        "noGpuTemperature": "暂无 GPU 温度",
+        "noCpuPower": "暂无 CPU 功耗数据",
+        "noGpuPower": "暂无 GPU 功耗数据",
+        "noFanData": "暂无风扇数据"
+      },
+      "recordingGap": "记录中断"
+    },
+    "profiles": {
+      "title": "曲线方案",
+      "currentCurveName": "当前曲线",
+      "newCurveName": "新曲线",
+      "add": "新建",
+      "manage": "管理",
+      "createTitle": "新建曲线方案",
+      "createDescription": "以当前曲线为基础创建新方案，原方案不会被修改。",
+      "createAction": "创建并切换",
+      "newNamePlaceholder": "新方案名称（最多6字）",
+      "manageTitle": "管理曲线方案",
+      "manageDescription": "重命名当前方案，或导入、导出方案。",
+      "renameLabel": "当前方案名称",
+      "namePlaceholder": "当前方案命名（最多6字）",
+      "saveName": "保存命名",
+      "saveAsNew": "另存为新方案",
+      "deleteCurrent": "删除当前方案",
+      "addAction": "新增方案",
+      "activeBadge": "当前",
+      "deleteLastError": "至少保留一个曲线方案",
+      "deleteProfileLabel": "删除方案 {{name}}",
+      "unsavedSwitchTitle": "当前曲线尚未保存",
+      "unsavedSwitchDescription": "切换方案前，可以保存当前修改或放弃修改。",
+      "saveAndSwitch": "保存并切换",
+      "discardAndSwitch": "放弃并切换",
+      "deleteConfirmTitle": "确认删除方案",
+      "deleteDescription": "确定删除“{{name}}”吗？删除后将自动切换到相邻方案。",
+      "deleteUnsavedDescription": "“{{name}}”还有未保存修改。删除方案将同时放弃这些修改。"
+    },
+    "importExport": {
+      "title": "导入 / 导出曲线方案",
+      "description": "支持复制、粘贴方案码",
+      "exportTitle": "导出",
+      "exportHint": "复制方案码可快速分享。未保存的当前曲线会先保存。",
+      "copyCode": "复制方案码",
+      "importTitle": "导入",
+      "importPlaceholder": "粘贴 B2C1. 开头的方案码",
+      "importAction": "导入为新方案"
+    },
+    "warning": {
+      "title": "注意",
+      "body": "低于1000转非飞智官方设计最低转速标准，由此引发的任何问题需要由用户自行承担！",
+      "confirm": "我已知悉"
+    },
+    "toast": {
+      "saveCurveFailed": "保存曲线失败: {{error}}",
+      "profileSwitched": "温控曲线已切换",
+      "switchFailed": "切换失败: {{error}}",
+      "profileRenamed": "方案命名已更新",
+      "renameFailed": "更新命名失败: {{error}}",
+      "profileSavedAsNew": "已另存为新方案",
+      "saveAsFailed": "另存失败: {{error}}",
+      "profileDeleted": "已删除曲线方案",
+      "deleteFailed": "删除失败: {{error}}",
+      "exportCopied": "导出字符串已复制",
+      "exportGenerated": "导出字符串已生成",
+      "exportCopiedAgain": "已复制导出字符串",
+      "exportFailed": "导出失败: {{error}}",
+      "importMissingCode": "请先粘贴导入字符串",
+      "importSucceeded": "已导入为新曲线方案",
+      "importFailed": "导入失败: {{error}}",
+      "saveLearningFailed": "保存学习设置失败",
+      "saveFeatureFailed": "保存风扇增强设置失败",
+      "learningReset": "已重置学习偏移",
+      "learningResetDescription": "风扇曲线将完全按用户设定执行",
+      "resetFailed": "重置失败"
+    }
+  },
+  "controlPanel": {
+    "overview": {
+      "title": "实时概览",
+      "currentTemperature": "当前温度",
+      "currentRpm": "实时转速",
+      "currentGear": "当前挡位",
+      "targetRpm": "目标转速",
+      "cpuGpuTemperature": "CPU {{cpu}}°C · GPU {{gpu}}°C",
+      "gearValue": "挡位 {{gear}}",
+      "workModes": {
+        "manual": "挡位工作模式",
+        "auto": "自动模式(实时转速)"
+      }
+    },
+    "light": {
+      "sectionTitle": "灯光效果",
+      "effectMode": "效果模式",
+      "animationSpeed": "动画速度",
+      "brightness": "亮度",
+      "smartTempWarning": "智能温控模式由设备自动控制灯效，不支持手动调节颜色与亮度。",
+      "colorLabel": "颜色 {{index}}",
+      "applyHintConnected": "应用后立即生效",
+      "applyHintDisconnected": "下次连接时自动生效"
+    },
+    "fan": {
+      "sectionTitle": "风扇控制",
+      "autoControlTitle": "自动温度控制",
+      "autoControlDescription": "根据温度曲线自动调节风扇转速",
+      "sampleSmoothingTitle": "温度平滑度",
+      "sampleSmoothingDescription": "EMA 指数加权：值越大越平滑（更稳）、越小响应越快（更跟手），不确定保持默认",
+      "temperatureBaselineTitle": "温度基准",
+      "temperatureBaselineDescription": "选择控温器件、显卡设备以及具体传感器。多显卡笔记本可在这里直接锁定独显。",
+      "cpuBaseline": "CPU 基准",
+      "processorDevice": "处理器设备",
+      "processorDeviceHintDetected": "当前已识别的处理器，会随 TempBridge 检测自动更新。",
+      "processorDeviceHintWaiting": "尚未识别到 CPU 型号，TempBridge 可用后会自动显示。",
+      "waitingRecognition": "等待识别...",
+      "temperatureSensor": "温度传感器",
+      "temperatureSensorMulti": "CPU 传感器（取平均）",
+      "temperatureSensorMultiHint": "勾选一个或多个核心，取其平均温度作为 CPU 控温基准；不勾选则自动选择。",
+      "currentBaselineTemperature": "当前基准温度 {{temperature}}°C",
+      "noCpuTemperatureData": "当前无可用 CPU 温度数据",
+      "gpuBaseline": "GPU 基准",
+      "gpuMonitoringToggle": "监测",
+      "gpuMonitoringToggleAria": "开关 GPU 温度监测",
+      "gpuMonitoringDisabledToast": "已停用 GPU 温度监测",
+      "gpuMonitoringEnabledToast": "已恢复 GPU 温度监测",
+      "gpuMonitoringDisabledHint": "不再轮询 GPU 传感器（混合显卡下可避免独显被持续唤醒），控温基准仅使用 CPU 温度。",
+      "gpuDevice": "显卡设备",
+      "gpuDeviceHintDetected": "自动模式当前命中：{{model}}",
+      "gpuDeviceHintAuto": "自动模式会优先尝试独显。",
+      "gpuDeviceHintLocked": "已锁定为你选择的显卡设备。",
+      "noGpuTemperatureData": "当前无可用 GPU 温度数据",
+      "currentControlSource": "当前控温正在使用 {{source}} 基准，控制温度 {{temperature}}°C。",
+      "noControlTemperature": "当前尚未拿到有效的控温基准温度。",
+      "transientSpikeFilterTitle": "温度尖峰过滤",
+      "transientSpikeFilterDescription": "忽略单次异常跳温，避免孤立跳点干扰智能温控采样和响应。",
+      "transientSpikeFilterAria": "切换温度尖峰过滤",
+      "learningTitle": "自适应学习",
+      "learningDescription": "长时间运行后，自动微调每个温度点的目标转速，使实际温度更贴近曲线设定值。学到的偏移随时可一键重置。",
+      "learningAria": "切换自适应学习",
+      "temperatureHistoryTitle": "温度历史记录",
+      "temperatureHistoryDescription": "开启后由核心服务保留最近 1 小时 CPU/GPU 温度曲线；关闭后仅在 GUI 打开期间绘制临时曲线。",
+      "temperatureHistoryAria": "切换核心温度历史记录",
+      "curveProfileTitle": "曲线方案",
+      "curveProfileDescription": "在设置页直接切换风扇温控曲线，避免来回切页。",
+      "customSpeedTitle": "自定义转速",
+      "customSpeedDescription": "固定转速，适合特殊场景",
+      "customSpeedWarning": "⚠ 自定义转速会禁用智能温控",
+      "toasts": {
+        "profileSwitched": "温控曲线已切换",
+        "profileSwitchFailed": "切换曲线失败: {{error}}"
+      }
+    },
+    "device": {
+      "sectionTitle": "设备设置",
+      "gearLightTitle": "挡位灯",
+      "gearLightDescription": "控制设备上的挡位指示灯",
+      "powerOnStartTitle": "通电自启动",
+      "powerOnStartDescription": "设备通电后自动运行",
+      "smartStartStopTitle": "智能启停",
+      "smartStartStopDescription": "系统关闭后何时停止散热"
+    },
+    "legionFnQ": {
+      "sectionTitle": "拯救者 Fn+Q 联动",
+      "enableTitle": "启用插件",
+      "enableDescription": "监听拯救者性能模式变化，包括 Fn+Q 和系统软件切换。",
+      "takeOverTitle": "接管风扇转速",
+      "takeOverDescription": "检测到性能模式变化后，将散热器切换到下方映射的手动档位。",
+      "mappingTitle": "模式映射",
+      "mappingDescription": "右侧“转速级别”是同一风扇档位内的低/中/高子档，影响实际 RPM。",
+      "headers": {
+        "mode": "拯救者模式",
+        "gear": "风扇档位",
+        "level": "转速级别"
+      },
+      "toasts": {
+        "saveFailed": "保存 Fn+Q 插件设置失败: {{error}}"
+      }
+    },
+    "system": {
+      "sectionTitle": "系统设置",
+      "themeTitle": "界面主题",
+      "themeDescription": "默认跟随系统，也可固定浅色/深色，或选择安装目录 themes 文件夹中的自定义主题",
+      "themeOpenFolder": "打开主题文件夹",
+      "languageTitle": "界面语言",
+      "languageDescription": "切换应用显示语言，立即生效并自动记住。",
+      "hotkeys": {
+        "title": "全局快捷键",
+        "description": "点击右侧输入框后直接按组合键，失焦自动保存；按 Backspace/Delete 或清除按钮可留空禁用该快捷键。",
+        "emptyPlaceholder": "留空为不设置",
+        "clearAria": "清除快捷键",
+        "manual": {
+          "title": "切换手动挡位",
+          "description": "在静音、标准、强劲、超频之间轮换，并保留各自的小挡位记忆。"
+        },
+        "auto": {
+          "title": "开关智能变频",
+          "description": "快速切换智能控温状态，适合游戏或安静场景之间来回切换。"
+        },
+        "curve": {
+          "title": "切换温控曲线",
+          "description": "快速轮换曲线方案，适合办公/游戏/夜间场景一键切换。"
+        },
+        "toasts": {
+          "duplicate": "三个快捷键不能设置为同一个组合",
+          "saved": "快捷键保存成功",
+          "saveFailed": "保存快捷键失败: {{error}}"
+        }
+      },
+      "autoStartTitle": "开机自启动",
+      "autoStartDescription": "Windows 启动时自动运行",
+      "autoStartTip": "以管理员身份运行可避免每次 UAC 授权",
+      "autoStartTitleLinux": "开机自启动",
+      "autoStartDescriptionLinux": "登录桌面后自动运行（XDG 自启动项）",
+      "reconnectTitle": "断连保持配置",
+      "reconnectDescription": "重连后继续使用 APP 配置",
+      "reconnectTip": "推荐开启，防止断连后进入设备默认模式",
+      "blurTitle": "窗口材质",
+      "blurDescription": "选择亚克力、云母或云母 Alt 材质，修改后需重启应用生效。"
+    },
+    "offline": {
+      "message": "设备未连接，部分功能不可用"
+    },
+    "debug": {
+      "panelTitle": "调试面板",
+      "modeTitle": "调试模式",
+      "modeDescription": "启用详细日志",
+      "refresh": "刷新调试信息",
+      "pawnTitle": "PawnIO 驱动",
+      "pawnDescription": "温度读取异常？尝试重新安装 PawnIO 驱动。",
+      "reinstall": "重新安装 PawnIO",
+      "toasts": {
+        "reinstallExecuted": "PawnIO 安装程序已执行",
+        "uninstallWarning": "PawnIO 卸载步骤返回提示：{{warning}}",
+        "bridgeWarning": "温度监控重新初始化失败：{{warning}}",
+        "reinstallFailed": "重新安装 PawnIO 失败：{{error}}"
+      }
+    },
+    "diagnostics": {
+      "title": "导出诊断包",
+      "description": "将调试信息、当前配置和最近日志打包为 ZIP，便于反馈排查问题。",
+      "button": "导出",
+      "toasts": {
+        "exported": "诊断包已导出：{{path}}",
+        "cancelled": "已取消导出",
+        "failed": "导出诊断包失败：{{error}}"
+      }
+    },
+    "customSpeedDialog": {
+      "title": "风险提示",
+      "enabledTitle": "启用后：",
+      "bullets": {
+        "disableAutoControl": "• 智能温控将被禁用",
+        "fixedSpeed": "• 风扇以固定转速运行",
+        "insufficientCooling": "• 可能导致散热不足"
+      },
+      "speedLabel": "设置转速",
+      "confirm": "确认"
+    },
+    "alerts": {
+      "autoStartFailed": "设置自启动失败: {{error}}",
+      "lightStripFailed": "设置灯带失败: {{error}}"
+    },
+    "options": {
+      "smartStartStop": {
+        "off": {
+          "label": "关闭",
+          "description": "禁用智能启停功能"
+        },
+        "immediate": {
+          "label": "即时",
+          "description": "立即响应系统负载变化"
+        },
+        "delayed": {
+          "label": "延时",
+          "description": "延时响应，避免频繁启停"
+        }
+      },
+      "sampleCount": {
+        "1": "1 · 即时跟随",
+        "2": "2 · 弱平滑",
+        "3": "3 · 默认",
+        "5": "5 · 较强平滑",
+        "10": "10 · 强平滑(慢响应)"
+      },
+      "tempSource": {
+        "max": "最高温度",
+        "cpu": "仅 CPU",
+        "gpu": "仅 GPU"
+      },
+      "themeMode": {
+        "light": "浅色",
+        "dark": "深色",
+        "system": "跟随系统"
+      },
+      "lightMode": {
+        "off": {
+          "label": "关闭灯光",
+          "description": "关闭所有RGB灯光"
+        },
+        "smart_temp": {
+          "label": "智能温控",
+          "description": "根据温度自动切换灯效"
+        },
+        "static_single": {
+          "label": "单色常亮",
+          "description": "固定单色显示"
+        },
+        "static_multi": {
+          "label": "多色常亮",
+          "description": "三色静态分区"
+        },
+        "rotation": {
+          "label": "多色旋转",
+          "description": "颜色循环旋转"
+        },
+        "flowing": {
+          "label": "流光",
+          "description": "预设流光效果"
+        },
+        "breathing": {
+          "label": "呼吸",
+          "description": "多色呼吸变化"
+        }
+      },
+      "lightSpeed": {
+        "fast": "快速",
+        "medium": "中速",
+        "slow": "慢速"
+      },
+      "lightPresets": {
+        "neon": "霓虹",
+        "forest": "森林",
+        "glacier": "冰川"
+      },
+      "legionPowerModes": {
+        "Quiet": "安静模式",
+        "Balance": "均衡模式",
+        "Performance": "野兽模式",
+        "Extreme": "超能模式",
+        "GodMode": "自定义模式"
+      },
+      "gpuDevice": {
+        "autoPreferred": "自动选择 (优先独显)",
+        "auto": "自动选择"
+      },
+      "sensor": {
+        "autoRecommended": "自动选择 (推荐)",
+        "auto": "自动选择"
+      },
+      "windowBlur": {
+        "auto": "自动（随系统）",
+        "acrylic": "亚克力",
+        "mica": "云母",
+        "tabbed": "云母 Alt",
+        "off": "关闭"
+      }
+    }
+  }
+}

@@ -1,30 +1,111 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:fluent_ui/fluent_ui.dart' as fluent;
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, listEquals, setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_controller.dart';
+import 'desktop_lifecycle.dart';
+import 'localization.dart';
+import 'noise_test_dialog.dart';
 import 'smooth_scroll.dart';
 import 'temperature_history.dart';
 
-void main() => runApp(const ThrmApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final lifecycle = await DesktopLifecycle.initialize();
+  if (lifecycle == null) {
+    await DesktopLifecycle.showExistingInstance();
+    return;
+  }
+  runApp(ThrmApp(lifecycle: lifecycle));
+  await lifecycle.showWhenReady();
+}
 
 fluent.FluentThemeData _fluentTheme(Brightness brightness) {
   final systemMica = defaultTargetPlatform == TargetPlatform.windows;
   return fluent.FluentThemeData(
     brightness: brightness,
     accentColor: fluent.Colors.blue,
+    scaffoldBackgroundColor: systemMica
+        ? Colors.transparent
+        : brightness == Brightness.dark
+        ? const Color(0xff202020)
+        : const Color(0xfff3f3f3),
     navigationPaneTheme: systemMica
         ? const fluent.NavigationPaneThemeData(
             backgroundColor: Colors.transparent,
           )
         : null,
   );
+}
+
+void _displayInfoBar(
+  BuildContext context, {
+  required WidgetBuilder builder,
+  Alignment alignment = Alignment.bottomCenter,
+  Duration duration = const Duration(seconds: 3),
+}) {
+  final theme = fluent.FluentTheme.of(context);
+  late OverlayEntry entry;
+  var fading = true;
+  var initialized = false;
+  entry = OverlayEntry(
+    builder: (overlayContext) => SafeArea(
+      child: Align(
+        alignment: alignment,
+        child: Padding(
+          padding: const EdgeInsetsDirectional.symmetric(
+            vertical: 24,
+            horizontal: 16,
+          ),
+          child: StatefulBuilder(
+            builder: (context, setState) {
+              Future<void> close() async {
+                if (!entry.mounted) return;
+                setState(() => fading = true);
+                await Future<void>.delayed(theme.mediumAnimationDuration);
+                if (entry.mounted) entry.remove();
+              }
+
+              if (!initialized) {
+                initialized = true;
+                () async {
+                  await Future<void>.delayed(theme.mediumAnimationDuration);
+                  if (!entry.mounted) return;
+                  setState(() => fading = false);
+                  await Future<void>.delayed(duration);
+                  await close();
+                }();
+              }
+
+              return AnimatedSwitcher(
+                duration: theme.mediumAnimationDuration,
+                switchInCurve: theme.animationCurve,
+                switchOutCurve: theme.animationCurve,
+                child: fading
+                    ? const SizedBox.shrink(key: ValueKey('info-bar-hidden'))
+                    : PhysicalModel(
+                        key: const ValueKey('info-bar-visible'),
+                        color: Colors.transparent,
+                        elevation: 8,
+                        child: builder(overlayContext),
+                      ),
+              );
+            },
+          ),
+        ),
+      ),
+    ),
+  );
+  Overlay.of(context).insert(entry);
 }
 
 ThemeMode _themeMode(Object? value) => switch (value) {
@@ -34,23 +115,54 @@ ThemeMode _themeMode(Object? value) => switch (value) {
 };
 
 class ThrmApp extends StatefulWidget {
-  const ThrmApp({super.key});
+  const ThrmApp({this.lifecycle, super.key});
+
+  final DesktopLifecycle? lifecycle;
 
   @override
   State<ThrmApp> createState() => _ThrmAppState();
 }
 
-class _ThrmAppState extends State<ThrmApp> {
+class _ThrmAppState extends State<ThrmApp> with WidgetsBindingObserver {
   late final AppController controller;
+  String? appliedMaterial;
 
   @override
   void initState() {
     super.initState();
-    controller = AppController()..start();
+    controller = AppController(
+      onShowWindow: widget.lifecycle?.show,
+      onQuit: widget.lifecycle?.close,
+    )..start();
+    controller.addListener(_syncMaterial);
+    WidgetsBinding.instance.addObserver(this);
+    widget.lifecycle?.onClose = controller.stop;
+  }
+
+  void _syncMaterial() {
+    final configuredTheme = controller.config?['themeMode'];
+    final systemDark =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+        Brightness.dark;
+    final dark =
+        configuredTheme == 'dark' || (configuredTheme != 'light' && systemDark);
+    final mode = controller.config?['windowBlur']?.toString() ?? 'auto';
+    final key = '$mode/$dark';
+    if (appliedMaterial == key) return;
+    appliedMaterial = key;
+    final lifecycle = widget.lifecycle;
+    if (lifecycle != null) {
+      unawaited(lifecycle.applyMaterial(mode, dark: dark));
+    }
   }
 
   @override
+  void didChangePlatformBrightness() => _syncMaterial();
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    controller.removeListener(_syncMaterial);
     controller.dispose();
     super.dispose();
   }
@@ -62,8 +174,14 @@ class _ThrmAppState extends State<ThrmApp> {
       builder: (context, _) => fluent.FluentApp(
         title: 'THRM',
         debugShowCheckedModeBanner: false,
-        locale: const Locale('zh', 'CN'),
-        supportedLocales: const [Locale('zh', 'CN')],
+        locale: appLocale(controller.config?['locale']),
+        supportedLocales: supportedAppLocales,
+        localizationsDelegates: const [
+          AppLocalizationsDelegate(),
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
         themeMode: _themeMode(controller.config?['themeMode']),
         theme: _fluentTheme(Brightness.light),
         darkTheme: _fluentTheme(Brightness.dark),
@@ -409,7 +527,12 @@ bool scheduleRuleMatchesAt(Map<String, dynamic> rule, DateTime now) {
       : days.contains(previousWeekday) && current < end;
 }
 
-const _pageLabels = ['状态', '曲线', '控制', '关于'];
+const _pageLabelKeys = [
+  'appShell.tabs.status',
+  'appShell.tabs.curve',
+  'appShell.tabs.control',
+  'appShell.tabs.about',
+];
 const _fluentPageIcons = [
   fluent.FluentIcons.view_dashboard,
   fluent.FluentIcons.line_chart,
@@ -425,7 +548,7 @@ class ThrmShell extends StatefulWidget {
   });
 
   final AppController controller;
-  final Future<ReleaseInfo> Function() fetchLatestRelease;
+  final Future<ReleaseInfo> Function(bool prerelease) fetchLatestRelease;
 
   @override
   State<ThrmShell> createState() => _ThrmShellState();
@@ -438,9 +561,37 @@ class _ThrmShellState extends State<ThrmShell> {
   final curveScrollController = SmoothScrollController();
   final controlScrollController = SmoothScrollController();
   final aboutScrollController = SmoothScrollController();
+  int shownNoticeVersion = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_showCoreNotice);
+  }
+
+  void _showCoreNotice() {
+    if (!mounted || shownNoticeVersion == widget.controller.noticeVersion) {
+      return;
+    }
+    shownNoticeVersion = widget.controller.noticeVersion;
+    final notice = widget.controller.lastNotice;
+    if (notice == null) return;
+    _displayInfoBar(
+      context,
+      alignment: Alignment.topCenter,
+      builder: (_) => fluent.InfoBar(
+        title: Text(notice['success'] == true ? '操作完成' : '操作失败'),
+        content: Text(notice['message']?.toString() ?? ''),
+        severity: notice['success'] == true
+            ? fluent.InfoBarSeverity.success
+            : fluent.InfoBarSeverity.error,
+      ),
+    );
+  }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_showCoreNotice);
     statusScrollController.dispose();
     curveScrollController.dispose();
     controlScrollController.dispose();
@@ -456,7 +607,7 @@ class _ThrmShellState extends State<ThrmShell> {
         _fluentPageIcons[index],
         key: ValueKey('navigation-item-$index'),
       ),
-      title: Text(_pageLabels[index]),
+      title: Text(AppLocalizations.of(context).text(_pageLabelKeys[index])),
       body: _page(ThrmPage.values[index]),
     );
     final view = fluent.NavigationView(
@@ -507,6 +658,7 @@ class _ThrmShellState extends State<ThrmShell> {
       scrollController: controlScrollController,
     ),
     ThrmPage.about => AboutPage(
+      controller: widget.controller,
       scrollController: aboutScrollController,
       fetchLatestRelease: widget.fetchLatestRelease,
     ),
@@ -537,7 +689,7 @@ class StatusPage extends StatelessWidget {
         final cpuTempError = temp?['cpuTempError']?.toString().trim() ?? '';
         final bridgeMessage = temp?['bridgeMessage']?.toString().trim() ?? '';
         final temperatureWarning = bridgeFailed
-            ? (bridgeMessage.isEmpty ? '温度监控暂不可用，Core 将继续自动恢复。' : bridgeMessage)
+            ? (bridgeMessage.isEmpty ? '温度监控暂不可用，Core 将继续自动恢复' : bridgeMessage)
             : (cpuTempError.isEmpty ? null : cpuTempError);
         final connectionMessage =
             controller.error ??
@@ -550,7 +702,9 @@ class StatusPage extends StatelessWidget {
         return fluent.ScaffoldPage.scrollable(
           scrollController: scrollController,
           header: fluent.PageHeader(
-            title: const Text('状态'),
+            title: Text(
+              AppLocalizations.of(context).text('appShell.tabs.status'),
+            ),
             commandBar: fluent.CommandBar(
               mainAxisAlignment: MainAxisAlignment.end,
               primaryItems: [
@@ -614,6 +768,20 @@ class StatusPage extends StatelessWidget {
                   label: '目标转速',
                   value: _metric(fan, 'targetRpm', ' RPM'),
                 ),
+                if ((temp?['cpuFanRpm'] as num?)?.toDouble()
+                    case final double value when value > 0)
+                  MetricCard(
+                    icon: fluent.FluentIcons.processing,
+                    label: '笔记本 CPU 风扇',
+                    value: '${value.round()} RPM',
+                  ),
+                if ((temp?['gpuFanRpm'] as num?)?.toDouble()
+                    case final double value when value > 0)
+                  MetricCard(
+                    icon: fluent.FluentIcons.processing,
+                    label: '笔记本 GPU 风扇',
+                    value: '${value.round()} RPM',
+                  ),
               ],
             ),
             if (temperatureWarning != null) ...[
@@ -798,16 +966,12 @@ class _FanCurvePageState extends State<FanCurvePage> {
   }
 
   void _showError(String message) {
-    fluent.displayInfoBar(
+    _displayInfoBar(
       context,
       alignment: Alignment.topCenter,
-      builder: (_, close) => fluent.InfoBar.error(
+      builder: (_) => fluent.InfoBar.error(
         title: const Text('操作失败'),
         content: Text(message),
-        action: fluent.IconButton(
-          icon: const Icon(fluent.WindowsIcons.chrome_close),
-          onPressed: close,
-        ),
       ),
     );
   }
@@ -1189,6 +1353,12 @@ class _FanCurvePageState extends State<FanCurvePage> {
     if (!saved) _showError(widget.controller.error ?? '设置温度历史保留时长失败');
   }
 
+  Future<void> _openNoiseTest() => fluent.showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => NoiseTestDialog(controller: widget.controller),
+  );
+
   Future<void> _handleProfileAction(
     _ProfileMenuAction action,
     FanCurveProfileOption? profile,
@@ -1339,7 +1509,22 @@ class _FanCurvePageState extends State<FanCurvePage> {
         final theme = fluent.FluentTheme.of(context);
         return fluent.ScaffoldPage.scrollable(
           scrollController: widget.scrollController,
-          header: const fluent.PageHeader(title: Text('风扇曲线')),
+          header: fluent.PageHeader(
+            title: Text(AppLocalizations.of(context).text('fanCurve.title')),
+            commandBar: fluent.CommandBar(
+              mainAxisAlignment: MainAxisAlignment.end,
+              primaryItems: [
+                fluent.CommandBarButton(
+                  icon: const Icon(fluent.FluentIcons.microphone),
+                  label: const Text('噪音测试'),
+                  onPressed:
+                      controlsEnabled && widget.controller.deviceConnected
+                      ? _openNoiseTest
+                      : null,
+                ),
+              ],
+            ),
+          ),
           children: [
             Wrap(
               alignment: WrapAlignment.spaceBetween,
@@ -1501,7 +1686,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
             if (points.isEmpty)
               const fluent.InfoBar(
                 title: Text('暂无可用曲线'),
-                content: Text('曲线至少需要两个温度递增、转速非递减的控制点。'),
+                content: Text('曲线至少需要两个温度递增、转速非递减的控制点'),
               )
             else
               fluent.Card(
@@ -1921,7 +2106,7 @@ class _ManualGearRpmDialogState extends State<_ManualGearRpmDialog> {
           children: [
             const fluent.InfoBar(
               title: Text('转速顺序'),
-              content: Text('保存时会将 12 个挡位限制在 800–4500 RPM，并保证从低到高不递减。'),
+              content: Text('保存时会将 12 个挡位限制在 800–4500 RPM，并保证从低到高不递减'),
             ),
             const SizedBox(height: 12),
             for (final preset in manualGearPresets) ...[
@@ -2444,7 +2629,7 @@ class _SpeedAvoidanceCard extends StatelessWidget {
             )
           : const fluent.InfoBar(
               title: Text('高级设置'),
-              content: Text('参数需要结合设备实测噪音调整；不清楚需求时请保持关闭。'),
+              content: Text('参数需要结合设备实测噪音调整；不清楚需求时请保持关闭'),
               severity: fluent.InfoBarSeverity.warning,
             ),
     );
@@ -2518,7 +2703,7 @@ class _ScheduleCard extends StatelessWidget {
                   ? '当前时间没有命中任何规则'
                   : '当前规则：${currentRule!['name']}',
             ),
-            content: const Text('分时计划只切换活动曲线方案，不会强制开启智能控温。'),
+            content: const Text('分时计划只切换活动曲线方案，不会强制开启智能控温'),
             severity: currentRule == null
                 ? fluent.InfoBarSeverity.info
                 : fluent.InfoBarSeverity.success,
@@ -3411,6 +3596,7 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
               child: _TemperatureHistoryChart(
                 key: const ValueKey('temperature-history-chart'),
                 points: points,
+                events: snapshot.events,
                 gapThreshold: gapThreshold,
                 cpuColor: cpuColor,
                 gpuColor: gpuColor,
@@ -3449,6 +3635,7 @@ Rect _temperatureHistoryChartRect(Size size) =>
 class _TemperatureHistoryChart extends StatefulWidget {
   const _TemperatureHistoryChart({
     required this.points,
+    required this.events,
     required this.gapThreshold,
     required this.cpuColor,
     required this.gpuColor,
@@ -3461,6 +3648,7 @@ class _TemperatureHistoryChart extends StatefulWidget {
   });
 
   final List<TemperatureHistoryPoint> points;
+  final List<TimelineEvent> events;
   final int gapThreshold;
   final Color cpuColor;
   final Color gpuColor;
@@ -3728,6 +3916,7 @@ class _TemperatureHistoryChartState extends State<_TemperatureHistoryChart> {
                         size: size,
                         painter: _TemperatureHistoryPainter(
                           points: points,
+                          events: widget.events,
                           gapThreshold: widget.gapThreshold,
                           kind: power
                               ? _HistoryPlotKind.power
@@ -3861,6 +4050,7 @@ enum _HistoryPlotKind { temperature, power }
 class _TemperatureHistoryPainter extends CustomPainter {
   const _TemperatureHistoryPainter({
     required this.points,
+    required this.events,
     required this.gapThreshold,
     required this.kind,
     required this.cpuColor,
@@ -3872,6 +4062,7 @@ class _TemperatureHistoryPainter extends CustomPainter {
   });
 
   final List<TemperatureHistoryPoint> points;
+  final List<TimelineEvent> events;
   final int gapThreshold;
   final _HistoryPlotKind kind;
   final Color cpuColor;
@@ -3951,6 +4142,34 @@ class _TemperatureHistoryPainter extends CustomPainter {
         Offset(x, chart.bottom + 8),
         labelColor,
         centered: true,
+      );
+    }
+
+    for (final event in events) {
+      if (event.timestamp < firstTimestamp ||
+          event.timestamp > points.last.timestamp) {
+        continue;
+      }
+      final x =
+          chart.left + chart.width * (event.timestamp - firstTimestamp) / span;
+      final color = switch (event.type) {
+        'disconnect' => const Color(0xffd13438),
+        'resume' => const Color(0xff8764b8),
+        'profile' => const Color(0xff038387),
+        _ => labelColor,
+      };
+      canvas.drawLine(
+        Offset(x, chart.top),
+        Offset(x, chart.bottom),
+        Paint()
+          ..color = color.withAlpha(150)
+          ..strokeWidth = 1,
+      );
+      _paintChartLabel(
+        canvas,
+        _timelineLabel(event.labelKey),
+        Offset(x + 3, chart.top + 3),
+        color,
       );
     }
 
@@ -4047,6 +4266,7 @@ class _TemperatureHistoryPainter extends CustomPainter {
   @override
   bool shouldRepaint(_TemperatureHistoryPainter oldDelegate) =>
       oldDelegate.points != points ||
+      oldDelegate.events != events ||
       oldDelegate.gapThreshold != gapThreshold ||
       oldDelegate.kind != kind ||
       oldDelegate.cpuColor != cpuColor ||
@@ -4056,6 +4276,18 @@ class _TemperatureHistoryPainter extends CustomPainter {
       oldDelegate.labelColor != labelColor ||
       oldDelegate.selectedIndex != selectedIndex;
 }
+
+String _timelineLabel(String key) => switch (key) {
+  'fanCurve.history.timeline.deviceConnected' => '设备连接',
+  'fanCurve.history.timeline.deviceDisconnected' => '设备断开',
+  'fanCurve.history.timeline.smartControlOn' => '智能控温开启',
+  'fanCurve.history.timeline.smartControlOff' => '智能控温关闭',
+  'fanCurve.history.timeline.curveSwitched' => '曲线切换',
+  'fanCurve.history.timeline.resumeFromSleep' => '系统唤醒',
+  'fanCurve.history.timeline.systemSuspended' => '系统睡眠',
+  'fanCurve.history.timeline.coreStarted' => 'Core 启动',
+  _ => key,
+};
 
 String _historyTime(int timestamp) {
   final time = DateTime.fromMillisecondsSinceEpoch(timestamp);
@@ -4254,9 +4486,9 @@ class _ControlPageState extends State<ControlPage> {
   final autoHotkeyController = TextEditingController();
   final curveHotkeyController = TextEditingController();
   final debugCommandController = TextEditingController(text: '27');
-  final cpuSensorFlyoutController = fluent.FlyoutController();
   Object? debugInfo;
   Object? debugResult;
+  bool exportingDiagnostics = false;
 
   @override
   void dispose() {
@@ -4264,7 +4496,6 @@ class _ControlPageState extends State<ControlPage> {
     autoHotkeyController.dispose();
     curveHotkeyController.dispose();
     debugCommandController.dispose();
-    cpuSensorFlyoutController.dispose();
     super.dispose();
   }
 
@@ -4290,86 +4521,44 @@ class _ControlPageState extends State<ControlPage> {
     }
   }
 
-  void _showError([String? fallback]) {
+  void _showOperationNotice(
+    String title,
+    String content,
+    fluent.InfoBarSeverity severity,
+  ) {
     if (!mounted) return;
-    fluent.displayInfoBar(
+    _displayInfoBar(
       context,
       alignment: Alignment.topCenter,
-      builder: (_, close) => fluent.InfoBar.error(
-        title: const Text('操作失败'),
-        content: Text(widget.controller.error ?? fallback ?? 'Core 未完成该操作'),
-        action: fluent.IconButton(
-          icon: const Icon(fluent.WindowsIcons.chrome_close),
-          onPressed: close,
-        ),
+      builder: (_) => fluent.InfoBar(
+        title: Text(title),
+        content: Text(content),
+        severity: severity,
+        style: severity == fluent.InfoBarSeverity.success
+            ? fluent.InfoBarThemeData(
+                icon: (_) => fluent.FluentIcons.completed_solid,
+              )
+            : null,
       ),
     );
+  }
+
+  void _showError([String? fallback]) {
+    _showOperationNotice(
+      '操作失败',
+      widget.controller.error ?? fallback ?? 'Core 未完成该操作',
+      fluent.InfoBarSeverity.error,
+    );
+  }
+
+  void _showSuccess(String title, String content) {
+    _showOperationNotice(title, content, fluent.InfoBarSeverity.success);
   }
 
   Future<bool> _saveConfig(Map<String, dynamic> patch, String action) async {
     final saved = await widget.controller.updateConfig(patch, action: action);
     if (!saved) _showError('$action失败');
     return saved;
-  }
-
-  Future<void> _showCpuSensorPicker(
-    List<Map<String, dynamic>> sensors,
-    Set<String> selected,
-  ) async {
-    final draft = {...selected};
-    await cpuSensorFlyoutController.showFlyout<void>(
-      barrierColor: Colors.transparent,
-      autoModeConfiguration: fluent.FlyoutAutoConfiguration(
-        preferredMode: fluent.FlyoutPlacementMode.bottomRight,
-      ),
-      builder: (context) => fluent.FlyoutContent(
-        constraints: const BoxConstraints(
-          minWidth: 280,
-          maxWidth: 360,
-          maxHeight: 360,
-        ),
-        child: StatefulBuilder(
-          builder: (context, setFlyoutState) => SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                fluent.Checkbox(
-                  key: const ValueKey('control-cpu-sensor-auto'),
-                  checked: draft.isEmpty,
-                  content: const Text('自动选择（推荐）'),
-                  onChanged: (_) => setFlyoutState(draft.clear),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: fluent.Divider(),
-                ),
-                for (final sensor in sensors)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: fluent.Checkbox(
-                      key: ValueKey('control-cpu-sensor-${sensor['key']}'),
-                      checked: draft.contains(sensor['key'].toString()),
-                      content: Text('${sensor['name']} (${sensor['value']}°C)'),
-                      onChanged: (checked) => setFlyoutState(() {
-                        final key = sensor['key'].toString();
-                        checked == true ? draft.add(key) : draft.remove(key);
-                      }),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    if (!mounted || setEquals(draft, selected)) return;
-    await _saveConfig({
-      'cpuSensors': [
-        for (final sensor in sensors)
-          if (draft.contains(sensor['key'].toString()))
-            sensor['key'].toString(),
-      ],
-    }, '设置 CPU 传感器');
   }
 
   Future<bool> _runControl(
@@ -4530,6 +4719,29 @@ class _ControlPageState extends State<ControlPage> {
     }
   }
 
+  Future<void> _exportDiagnostics() async {
+    final now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final location = await getSaveLocation(
+      suggestedName:
+          'THRM-diagnostics-${now.year}${two(now.month)}${two(now.day)}-'
+          '${two(now.hour)}${two(now.minute)}${two(now.second)}.zip',
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'ZIP archive', extensions: ['zip']),
+      ],
+    );
+    if (location == null || !mounted) return;
+    setState(() => exportingDiagnostics = true);
+    final path = await widget.controller.exportDiagnostics(location.path);
+    if (!mounted) return;
+    setState(() => exportingDiagnostics = false);
+    if (path == null) {
+      _showError('导出诊断包失败');
+    } else {
+      _showSuccess('诊断包已导出', path);
+    }
+  }
+
   Future<void> _sendDebugCommand() async {
     final command = debugCommandController.text.trim();
     if (parseDeviceDebugCommand(command) == null) {
@@ -4549,6 +4761,55 @@ class _ControlPageState extends State<ControlPage> {
     }
   }
 
+  Future<void> _connectDevice() async {
+    if (await widget.controller.connectDevice()) {
+      _showSuccess('设备连接完成', 'Core 已重新扫描并连接设备');
+    } else {
+      _showError('连接设备失败');
+    }
+  }
+
+  Future<void> _disconnectDevice() async {
+    if (await widget.controller.disconnectDevice()) {
+      _showSuccess('设备已断开', '已暂停当前设备连接，并停止自动重连');
+    } else {
+      _showError('断开设备失败');
+    }
+  }
+
+  Future<void> _testTemperatureReading() async {
+    if (await widget.controller.testTemperatureReading()) {
+      final temp = widget.controller.temperature;
+      final controlTemp = temp?['controlTemp'];
+      _showSuccess(
+        '温度读取完成',
+        controlTemp is num && controlTemp > 0
+            ? '当前控制温度 ${controlTemp.round()}°C'
+            : '已完成读取；如果仍为 0，请检查桥接或 PawnIO 状态',
+      );
+    } else {
+      _showError('测试温度读取失败');
+    }
+  }
+
+  Future<void> _restartPawnIO() async {
+    final result = await widget.controller.restartPawnIO();
+    if (result == null) {
+      _showError('重启 PawnIO 失败');
+    } else {
+      _showSuccess('PawnIO 已重启', '温度桥接已尝试重新初始化');
+    }
+  }
+
+  Future<void> _reinstallPawnIO() async {
+    final result = await widget.controller.reinstallPawnIO();
+    if (result == null) {
+      _showError('重装 PawnIO 失败');
+    } else {
+      _showSuccess('PawnIO 安装完成', '已重新初始化温度监控');
+    }
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
@@ -4559,11 +4820,15 @@ class _ControlPageState extends State<ControlPage> {
       if (config == null) {
         return fluent.ScaffoldPage.scrollable(
           scrollController: widget.scrollController,
-          header: const fluent.PageHeader(title: Text('控制')),
+          header: fluent.PageHeader(
+            title: Text(
+              AppLocalizations.of(context).text('appShell.tabs.control'),
+            ),
+          ),
           children: const [
             fluent.InfoBar.warning(
               title: Text('正在等待 Core 配置'),
-              content: Text('连接成功后将在这里显示设备与系统控制。'),
+              content: Text('连接成功后将在这里显示设备与系统控制'),
             ),
           ],
         );
@@ -4576,10 +4841,16 @@ class _ControlPageState extends State<ControlPage> {
       final model = widget.controller.deviceStatus?['model']?.toString() ?? '';
       final isBs1 = model == 'BS1';
       final legionSupport = _stringMap(config['legionFnQSupport']);
+      final temperature = widget.controller.temperature;
+      final temperatureUnavailable =
+          temperature?['bridgeOk'] == false ||
+          (temperature?['cpuTempError']?.toString().trim().isNotEmpty == true);
       return fluent.ScaffoldPage.scrollable(
         scrollController: widget.scrollController,
         header: fluent.PageHeader(
-          title: const Text('控制'),
+          title: Text(
+            AppLocalizations.of(context).text('appShell.tabs.control'),
+          ),
           commandBar: fluent.CommandBar(
             mainAxisAlignment: MainAxisAlignment.end,
             primaryItems: [
@@ -4602,10 +4873,17 @@ class _ControlPageState extends State<ControlPage> {
           if (!connected || !widget.controller.deviceConnected) ...[
             fluent.InfoBar.warning(
               title: Text(connected ? '设备未连接' : 'Core 未连接'),
-              content: const Text('设备相关控件暂不可用，系统与界面设置仍可修改。'),
+              content: const Text('设备相关控件暂不可用，系统与界面设置仍可修改'),
             ),
             const SizedBox(height: 16),
           ],
+          _buildRecoveryCard(
+            connected: connected,
+            deviceConnected: deviceConnected,
+            temperatureUnavailable: temperatureUnavailable,
+            busy: busy,
+          ),
+          const SizedBox(height: 16),
           if (!isBs1) ...[
             _buildLightCard(deviceConnected, busy),
             const SizedBox(height: 16),
@@ -4627,6 +4905,80 @@ class _ControlPageState extends State<ControlPage> {
       );
     },
   );
+
+  Widget _buildRecoveryCard({
+    required bool connected,
+    required bool deviceConnected,
+    required bool temperatureUnavailable,
+    required bool busy,
+  }) {
+    final canRun = connected && !busy;
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.repair,
+      title: '连接与恢复',
+      description: temperatureUnavailable
+          ? '温度桥接状态异常，可先测试读取或重启驱动。'
+          : deviceConnected
+          ? '设备连接正常；这里保留手动恢复入口。'
+          : '设备未连接，可手动触发重新扫描。',
+      trailing: const SizedBox.shrink(),
+      childPadding: _settingRowsPadding,
+      child: Column(
+        children: [
+          _SettingRow(
+            title: '设备连接',
+            description: deviceConnected
+                ? '主动断开后会暂停自动重连，适合换设备或排查连接。'
+                : '重新扫描 HID / BLE 设备并恢复当前配置。',
+            trailing: deviceConnected
+                ? fluent.Button(
+                    key: const ValueKey('control-device-disconnect'),
+                    onPressed: canRun ? _disconnectDevice : null,
+                    child: const Text('断开设备'),
+                  )
+                : fluent.FilledButton(
+                    key: const ValueKey('control-device-connect'),
+                    onPressed: canRun ? _connectDevice : null,
+                    child: const Text('连接设备'),
+                  ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '温度读取',
+            description: '立即读取一次 CPU / GPU 温度，用于确认桥接和传感器状态。',
+            trailing: fluent.Button(
+              key: const ValueKey('control-temperature-test'),
+              onPressed: canRun ? _testTemperatureReading : null,
+              child: const Text('测试读取'),
+            ),
+          ),
+          if (Platform.isWindows) ...[
+            const fluent.Divider(),
+            _SettingRow(
+              title: 'PawnIO 驱动',
+              description: 'CPU 温度读取异常时，可先重启驱动；仍失败再重装。',
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  fluent.Button(
+                    key: const ValueKey('control-pawnio-restart'),
+                    onPressed: canRun ? _restartPawnIO : null,
+                    child: const Text('重启'),
+                  ),
+                  const SizedBox(width: 8),
+                  fluent.Button(
+                    key: const ValueKey('control-pawnio-reinstall'),
+                    onPressed: canRun ? _reinstallPawnIO : null,
+                    child: const Text('重装'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   Widget _buildLightCard(bool enabled, bool busy) {
     final mode = lightDraft['mode'] as String;
@@ -4765,7 +5117,7 @@ class _ControlPageState extends State<ControlPage> {
             const SizedBox(height: 8),
             const fluent.InfoBar.warning(
               title: Text('智能温度灯效'),
-              content: Text('该模式由设备根据温度自动控制颜色与亮度。'),
+              content: Text('该模式由设备根据温度自动控制颜色与亮度'),
             ),
           ],
           if (colorCount > 0) ...[
@@ -4857,6 +5209,35 @@ class _ControlPageState extends State<ControlPage> {
         const {1, 2, 3, 5, 10}.contains(config['tempSampleCount'])
         ? config['tempSampleCount'] as int
         : 1;
+    final comboBoxButtonHeight =
+        (MediaQuery.textScalerOf(context).scale(fluent.kComboBoxItemHeight) +
+                fluent.FluentTheme.of(
+                  context,
+                ).visualDensity.baseSizeAdjustment.dy -
+                4.0)
+            .clamp(0.0, double.infinity);
+    final cpuSensorLabel = selectedCpuSensors.isEmpty
+        ? '自动选择'
+        : selectedCpuSensors.length == 1
+        ? cpuSensors
+              .firstWhere(
+                (sensor) =>
+                    selectedCpuSensors.contains(sensor['key'].toString()),
+              )['name']
+              .toString()
+        : '已选 ${selectedCpuSensors.length} 项';
+    final cpuSensorDraft = {...selectedCpuSensors};
+
+    Future<void> saveCpuSensors() async {
+      if (!mounted || setEquals(cpuSensorDraft, selectedCpuSensors)) return;
+      await _saveConfig({
+        'cpuSensors': [
+          for (final sensor in cpuSensors)
+            if (cpuSensorDraft.contains(sensor['key'].toString()))
+              sensor['key'].toString(),
+        ],
+      }, '设置 CPU 传感器');
+    }
 
     return _CurveFeatureCard(
       icon: fluent.FluentIcons.diagnostic,
@@ -4932,40 +5313,135 @@ class _ControlPageState extends State<ControlPage> {
                 : '选择参与 CPU 温度计算的传感器。',
             trailing: SizedBox(
               width: _settingControlWidth,
-              child: fluent.FlyoutTarget(
-                controller: cpuSensorFlyoutController,
-                child: fluent.Button(
-                  key: const ValueKey('control-cpu-sensors'),
-                  onPressed: enabled && !busy && cpuSensors.isNotEmpty
-                      ? () =>
-                            _showCpuSensorPicker(cpuSensors, selectedCpuSensors)
-                      : null,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          selectedCpuSensors.isEmpty
-                              ? '自动选择'
-                              : selectedCpuSensors.length == 1
-                              ? cpuSensors
-                                    .firstWhere(
-                                      (sensor) => selectedCpuSensors.contains(
-                                        sensor['key'].toString(),
-                                      ),
-                                    )['name']
-                                    .toString()
-                              : '已选 ${selectedCpuSensors.length} 项',
-                          overflow: TextOverflow.ellipsis,
+              child: fluent.DropDownButton(
+                key: const ValueKey('control-cpu-sensors'),
+                disabled: !enabled || busy || cpuSensors.isEmpty,
+                buttonBuilder: (context, onOpen) => SizedBox(
+                  height: comboBoxButtonHeight,
+                  child: fluent.Button(
+                    onPressed: onOpen,
+                    style: const fluent.ButtonStyle(
+                      padding: WidgetStatePropertyAll(
+                        EdgeInsetsDirectional.zero,
+                      ),
+                    ),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Padding(
+                        padding: const EdgeInsetsDirectional.only(
+                          start: 11,
+                          end: 15,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                cpuSensorLabel,
+                                textAlign: TextAlign.start,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Builder(
+                              builder: (context) {
+                                final theme = fluent.FluentTheme.of(context);
+                                final states = fluent.HoverButton.of(
+                                  context,
+                                ).states;
+                                final color = states.isDisabled
+                                    ? theme.resources.textFillColorDisabled
+                                    : states.isPressed
+                                    ? theme.resources.textFillColorTertiary
+                                    : theme.resources.textFillColorSecondary;
+                                return Padding(
+                                  padding: const EdgeInsetsDirectional.only(
+                                    start: 8,
+                                  ),
+                                  child: fluent.WindowsIcon(
+                                    fluent.WindowsIcons.chevron_down,
+                                    color: color,
+                                    size: _comboBoxIconSize,
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      const fluent.WindowsIcon(
-                        fluent.WindowsIcons.chevron_down,
-                        size: _comboBoxIconSize,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
+                onOpen: () {
+                  cpuSensorDraft
+                    ..clear()
+                    ..addAll(selectedCpuSensors);
+                },
+                onClose: saveCpuSensors,
+                items: [
+                  fluent.MenuFlyoutItemBuilder(
+                    builder: (context) => StatefulBuilder(
+                      builder: (context, setMenuState) {
+                        Widget toggle({
+                          required Widget text,
+                          required bool value,
+                          required ValueChanged<bool> onChanged,
+                        }) => fluent.ToggleMenuFlyoutItem(
+                          text: text,
+                          value: value,
+                          closeAfterClick: false,
+                          onChanged: onChanged,
+                        ).build(context);
+                        return ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            minWidth: 280,
+                            maxWidth: 360,
+                            maxHeight: 360,
+                          ),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                KeyedSubtree(
+                                  key: const ValueKey(
+                                    'control-cpu-sensor-auto',
+                                  ),
+                                  child: toggle(
+                                    text: const Text('自动选择（推荐）'),
+                                    value: cpuSensorDraft.isEmpty,
+                                    onChanged: (_) =>
+                                        setMenuState(cpuSensorDraft.clear),
+                                  ),
+                                ),
+                                const fluent.Divider(),
+                                for (final sensor in cpuSensors)
+                                  KeyedSubtree(
+                                    key: ValueKey(
+                                      'control-cpu-sensor-${sensor['key']}',
+                                    ),
+                                    child: toggle(
+                                      text: Text(
+                                        '${sensor['name']} (${sensor['value']}°C)',
+                                      ),
+                                      value: cpuSensorDraft.contains(
+                                        sensor['key'].toString(),
+                                      ),
+                                      onChanged: (checked) => setMenuState(() {
+                                        final key = sensor['key'].toString();
+                                        checked
+                                            ? cpuSensorDraft.add(key)
+                                            : cpuSensorDraft.remove(key);
+                                      }),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -5378,6 +5854,21 @@ class _ControlPageState extends State<ControlPage> {
         const {'system', 'light', 'dark'}.contains(config['themeMode'])
         ? config['themeMode'] as String
         : 'system';
+    final windowBlur =
+        const {
+          'auto',
+          'acrylic',
+          'mica',
+          'tabbed',
+          'off',
+        }.contains(config['windowBlur'])
+        ? config['windowBlur'] as String
+        : config['windowBlur'] == 'on'
+        ? 'mica'
+        : 'auto';
+    final locale = const {'zh-CN', 'en-US', 'ja-JP'}.contains(config['locale'])
+        ? config['locale'] as String
+        : 'zh-CN';
     return _CurveFeatureCard(
       icon: fluent.FluentIcons.settings,
       title: '系统设置',
@@ -5405,6 +5896,68 @@ class _ControlPageState extends State<ControlPage> {
                     ? (value) {
                         if (value != null) {
                           _saveConfig({'themeMode': value}, '切换界面主题');
+                        }
+                      }
+                    : null,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: AppLocalizations.of(context).text('common.language'),
+            description: '切换 Flutter 界面语言。',
+            trailing: SizedBox(
+              width: _settingControlWidth,
+              child: fluent.ComboBox<String>(
+                key: const ValueKey('control-locale'),
+                value: locale,
+                isExpanded: true,
+                iconSize: _comboBoxIconSize,
+                items: [
+                  for (final value in const ['zh-CN', 'en-US', 'ja-JP'])
+                    fluent.ComboBoxItem(
+                      value: value,
+                      child: Text(
+                        AppLocalizations.of(
+                          context,
+                        ).text('common.languages.$value'),
+                      ),
+                    ),
+                ],
+                onChanged: connected && !busy
+                    ? (value) {
+                        if (value != null) {
+                          _saveConfig({'locale': value}, '切换界面语言');
+                        }
+                      }
+                    : null,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '窗口材质',
+            description: Platform.isWindows
+                ? '按 Fluent Design 使用亚克力、云母或 Tabbed 材质。'
+                : '窗口材质仅在 Windows 上可用。',
+            trailing: SizedBox(
+              width: _settingControlWidth,
+              child: fluent.ComboBox<String>(
+                key: const ValueKey('control-window-material'),
+                value: windowBlur,
+                isExpanded: true,
+                iconSize: _comboBoxIconSize,
+                items: const [
+                  fluent.ComboBoxItem(value: 'auto', child: Text('自动')),
+                  fluent.ComboBoxItem(value: 'acrylic', child: Text('亚克力')),
+                  fluent.ComboBoxItem(value: 'mica', child: Text('云母')),
+                  fluent.ComboBoxItem(value: 'tabbed', child: Text('Tabbed')),
+                  fluent.ComboBoxItem(value: 'off', child: Text('关闭')),
+                ],
+                onChanged: connected && !busy && Platform.isWindows
+                    ? (value) {
+                        if (value != null) {
+                          _saveConfig({'windowBlur': value}, '切换窗口材质');
                         }
                       }
                     : null,
@@ -5576,6 +6129,26 @@ class _ControlPageState extends State<ControlPage> {
                   ],
                 ),
               ),
+              fluent.Button(
+                key: const ValueKey('control-export-diagnostics'),
+                onPressed: busy || exportingDiagnostics
+                    ? null
+                    : _exportDiagnostics,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (exportingDiagnostics)
+                      const SizedBox.square(
+                        dimension: 14,
+                        child: fluent.ProgressRing(strokeWidth: 2),
+                      )
+                    else
+                      const Icon(fluent.FluentIcons.download, size: 16),
+                    const SizedBox(width: 8),
+                    const Text('导出诊断包'),
+                  ],
+                ),
+              ),
             ],
           ),
           if (debugInfo != null) ...[
@@ -5603,8 +6176,8 @@ class _ControlPageState extends State<ControlPage> {
             content: Text(
               dangerous
                   ? '0x${commandByte.toRadixString(16).toUpperCase().padLeft(2, '0')} '
-                        '会直接操作固件底层寄存器，误用可能导致设备异常甚至变砖。'
-                  : '命令会直接下发到设备固件，请仅在明确了解协议时使用。',
+                        '会直接操作固件底层寄存器，误用可能导致设备异常甚至变砖'
+                  : '命令会直接下发到设备固件，请仅在明确了解协议时使用',
             ),
             severity: dangerous
                 ? fluent.InfoBarSeverity.error
@@ -5779,13 +6352,25 @@ const _repositoryUrl = 'https://github.com/TIANLI0/THRM';
 const _latestReleaseUrl = 'https://github.com/TIANLI0/THRM/releases/latest';
 const _latestReleaseApiUrl =
     'https://api.github.com/repos/TIANLI0/THRM/releases/latest';
+const _releasesApiUrl =
+    'https://api.github.com/repos/TIANLI0/THRM/releases?per_page=30';
+const _creditsUrl =
+    'https://raw.githubusercontent.com/TIANLI0/THRM/main/credits.json';
 
-typedef ReleaseInfo = ({String tag, String url, String body});
+typedef ReleaseInfo = ({
+  String tag,
+  String url,
+  String body,
+  String installerUrl,
+  bool prerelease,
+});
 
-Future<ReleaseInfo> _fetchLatestRelease() async {
+Future<ReleaseInfo> _fetchLatestRelease(bool prerelease) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
   try {
-    final request = await client.getUrl(Uri.parse(_latestReleaseApiUrl));
+    final request = await client.getUrl(
+      Uri.parse(prerelease ? _releasesApiUrl : _latestReleaseApiUrl),
+    );
     request.headers
       ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
       ..set(HttpHeaders.userAgentHeader, 'THRM-Flutter/$_appVersion');
@@ -5795,10 +6380,18 @@ Future<ReleaseInfo> _fetchLatestRelease() async {
       throw HttpException('GitHub API 返回 HTTP ${response.statusCode}');
     }
     final decoded = jsonDecode(body);
-    if (decoded is! Map) throw const FormatException('GitHub 返回格式无效');
-    final tag = decoded['tag_name']?.toString().trim() ?? '';
+    final Object? release = prerelease && decoded is List
+        ? decoded.cast<Object?>().whereType<Map>().firstWhere(
+            (item) => item['draft'] != true && item['prerelease'] == true,
+            orElse: () => const {},
+          )
+        : decoded;
+    if (release is! Map || release.isEmpty) {
+      throw FormatException(prerelease ? '没有可用的预发布版本' : 'GitHub 返回格式无效');
+    }
+    final tag = release['tag_name']?.toString().trim() ?? '';
     if (tag.isEmpty) throw const FormatException('GitHub 发布版本缺少标签');
-    final rawUrl = decoded['html_url']?.toString() ?? '';
+    final rawUrl = release['html_url']?.toString() ?? '';
     final uri = Uri.tryParse(rawUrl);
     final url =
         uri?.scheme == 'https' &&
@@ -5806,7 +6399,43 @@ Future<ReleaseInfo> _fetchLatestRelease() async {
             uri!.path.startsWith('/TIANLI0/THRM/releases/')
         ? rawUrl
         : _latestReleaseUrl;
-    return (tag: tag, url: url, body: decoded['body']?.toString().trim() ?? '');
+    var installerUrl = '';
+    final assets = release['assets'];
+    if (assets is List) {
+      for (final asset in assets.whereType<Map>()) {
+        final name = asset['name']?.toString().toLowerCase() ?? '';
+        final candidate = asset['browser_download_url']?.toString() ?? '';
+        if (name == 'thrm-amd64-installer.exe' ||
+            (name.contains('installer') && name.endsWith('.exe'))) {
+          installerUrl = candidate;
+          if (name == 'thrm-amd64-installer.exe') break;
+        }
+      }
+    }
+    return (
+      tag: tag,
+      url: url,
+      body: release['body']?.toString().trim() ?? '',
+      installerUrl: installerUrl,
+      prerelease: release['prerelease'] == true,
+    );
+  } finally {
+    client.close(force: true);
+  }
+}
+
+Future<Map<String, dynamic>> _fetchCredits() async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final request = await client.getUrl(Uri.parse(_creditsUrl));
+    request.headers.set(
+      HttpHeaders.userAgentHeader,
+      'THRM-Flutter/$_appVersion',
+    );
+    final response = await request.close().timeout(const Duration(seconds: 10));
+    if (response.statusCode != HttpStatus.ok) return const {};
+    final decoded = jsonDecode(await response.transform(utf8.decoder).join());
+    return decoded is Map ? Map<String, dynamic>.from(decoded) : const {};
   } finally {
     client.close(force: true);
   }
@@ -5836,13 +6465,15 @@ Future<bool> _openExternal(String value) async {
 
 class AboutPage extends StatefulWidget {
   const AboutPage({
+    required this.controller,
     required this.scrollController,
     this.fetchLatestRelease = _fetchLatestRelease,
     super.key,
   });
 
+  final AppController controller;
   final ScrollController scrollController;
-  final Future<ReleaseInfo> Function() fetchLatestRelease;
+  final Future<ReleaseInfo> Function(bool prerelease) fetchLatestRelease;
 
   @override
   State<AboutPage> createState() => _AboutPageState();
@@ -5851,12 +6482,48 @@ class AboutPage extends StatefulWidget {
 class _AboutPageState extends State<AboutPage> {
   ReleaseInfo? release;
   bool checking = false;
+  bool prerelease = false;
   String? releaseError;
+  Object? updateProgressSource;
+  List<Map<String, dynamic>> contributors = const [];
+  List<Map<String, dynamic>> sponsors = const [];
 
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_syncUpdateProgress);
     _checkRelease();
+    _loadCredits();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_syncUpdateProgress);
+    super.dispose();
+  }
+
+  void _syncUpdateProgress() {
+    final progress = widget.controller.updateProgress;
+    if (mounted && !identical(progress, updateProgressSource)) {
+      setState(() => updateProgressSource = progress);
+    }
+  }
+
+  Future<void> _loadCredits() async {
+    try {
+      final credits = await _fetchCredits();
+      if (!mounted) return;
+      setState(() {
+        contributors = [
+          for (final item in credits['contributors'] as List? ?? const [])
+            if (item is Map) Map<String, dynamic>.from(item),
+        ];
+        sponsors = [
+          for (final item in credits['sponsors'] as List? ?? const [])
+            if (item is Map) Map<String, dynamic>.from(item),
+        ];
+      });
+    } catch (_) {}
   }
 
   Future<void> _checkRelease() async {
@@ -5865,7 +6532,7 @@ class _AboutPageState extends State<AboutPage> {
       releaseError = null;
     });
     try {
-      final next = await widget.fetchLatestRelease();
+      final next = await widget.fetchLatestRelease(prerelease);
       if (mounted) setState(() => release = next);
     } catch (error) {
       if (mounted) setState(() => releaseError = error.toString());
@@ -5876,28 +6543,40 @@ class _AboutPageState extends State<AboutPage> {
 
   Future<void> _open(String url) async {
     if (await _openExternal(url) || !mounted) return;
-    fluent.displayInfoBar(
+    _displayInfoBar(
       context,
       alignment: Alignment.topCenter,
-      builder: (_, close) => fluent.InfoBar.error(
-        title: const Text('无法打开链接'),
-        content: Text(url),
-        action: fluent.IconButton(
-          icon: const Icon(fluent.WindowsIcons.chrome_close),
-          onPressed: close,
-        ),
-      ),
+      builder: (_) =>
+          fluent.InfoBar.error(title: const Text('无法打开链接'), content: Text(url)),
     );
+  }
+
+  Future<void> _installUpdate() async {
+    final installerUrl = release?.installerUrl ?? '';
+    if (installerUrl.isEmpty) return;
+    if (!await widget.controller.downloadAndInstallUpdate(installerUrl) &&
+        mounted) {
+      setState(() => releaseError = widget.controller.error ?? '启动更新失败');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final hasUpdate =
         release != null && !isLatestVersion(_appVersion, release!.tag);
+    final updateProgress = widget.controller.updateProgress;
+    final updateStage = updateProgress?['stage']?.toString() ?? '';
+    final updatePercent = updateProgress?['percent'];
     final theme = fluent.FluentTheme.of(context);
     return fluent.ScaffoldPage.scrollable(
       scrollController: widget.scrollController,
-      header: const fluent.PageHeader(title: Text('关于')),
+      header: fluent.PageHeader(
+        title: Text(
+          AppLocalizations.of(
+            context,
+          ).text('aboutPanel.title', const {'name': 'THRM'}),
+        ),
+      ),
       children: [
         fluent.Card(
           padding: const EdgeInsets.all(24),
@@ -5950,11 +6629,30 @@ class _AboutPageState extends State<AboutPage> {
         _CurveFeatureCard(
           icon: fluent.FluentIcons.refresh,
           title: '版本与更新',
-          description: '从 GitHub Releases 检查稳定版本；安装仍由发布页完成。',
-          trailing: fluent.FilledButton(
-            key: const ValueKey('about-check-update'),
-            onPressed: checking ? null : _checkRelease,
-            child: Text(checking ? '检查中…' : '检查更新'),
+          description: '从 GitHub Releases 检查版本，并由 Core 安全下载、静默安装。',
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              fluent.ToggleSwitch(
+                checked: prerelease,
+                content: const Text('预发布'),
+                onChanged: checking
+                    ? null
+                    : (value) {
+                        setState(() {
+                          prerelease = value;
+                          release = null;
+                        });
+                        _checkRelease();
+                      },
+              ),
+              const SizedBox(width: 12),
+              fluent.FilledButton(
+                key: const ValueKey('about-check-update'),
+                onPressed: checking ? null : _checkRelease,
+                child: Text(checking ? '检查中…' : '检查更新'),
+              ),
+            ],
           ),
           childPadding: _settingContentPadding,
           child: Column(
@@ -6004,18 +6702,49 @@ class _AboutPageState extends State<AboutPage> {
                 ),
               ],
               const SizedBox(height: 8),
+              if (updateStage == 'downloading') ...[
+                fluent.ProgressBar(
+                  value: updatePercent is num && updatePercent >= 0
+                      ? updatePercent.toDouble()
+                      : null,
+                ),
+                const SizedBox(height: 8),
+              ],
               Align(
                 alignment: AlignmentDirectional.centerEnd,
-                child: fluent.Button(
-                  onPressed: () => _open(release?.url ?? _latestReleaseUrl),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(fluent.FluentIcons.open_in_new_window, size: 16),
-                      SizedBox(width: 8),
-                      Text('打开发布页'),
-                    ],
-                  ),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    if (Platform.isWindows &&
+                        hasUpdate &&
+                        release?.installerUrl.isNotEmpty == true)
+                      fluent.FilledButton(
+                        key: const ValueKey('about-install-update'),
+                        onPressed:
+                            updateStage == 'downloading' ||
+                                updateStage == 'installing'
+                            ? null
+                            : _installUpdate,
+                        child: Text(
+                          updateStage == 'downloading'
+                              ? '下载中…'
+                              : updateStage == 'installing'
+                              ? '正在启动安装…'
+                              : '下载并安装',
+                        ),
+                      ),
+                    fluent.Button(
+                      onPressed: () => _open(release?.url ?? _latestReleaseUrl),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(fluent.FluentIcons.open_in_new_window, size: 16),
+                          SizedBox(width: 8),
+                          Text('打开发布页'),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -6064,6 +6793,38 @@ class _AboutPageState extends State<AboutPage> {
                   ],
                 ),
               ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _CurveFeatureCard(
+          icon: fluent.FluentIcons.people,
+          title: '贡献者与赞助者',
+          description: '名单从项目仓库动态更新，无需随版本发布。',
+          trailing: Text(
+            '${contributors.length} 位贡献者 · ${sponsors.length} 位赞助者',
+          ),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final person in contributors)
+                fluent.Button(
+                  onPressed:
+                      person['url']?.toString().startsWith('https://') == true
+                      ? () => _open(person['url'].toString())
+                      : null,
+                  child: Text(
+                    person['name']?.toString().trim().isNotEmpty == true
+                        ? person['name'].toString()
+                        : person['login']?.toString() ?? '贡献者',
+                  ),
+                ),
+              if (sponsors.isNotEmpty)
+                _ValueBadge(
+                  text:
+                      '累计赞助 ¥${sponsors.fold<double>(0, (sum, item) => sum + ((item['amount'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2)}',
+                ),
             ],
           ),
         ),
