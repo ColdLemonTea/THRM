@@ -22,7 +22,7 @@ func TestSharedConstants(t *testing.T) {
 	if ProtocolVersion != "3.0" {
 		t.Fatalf("ProtocolVersion = %q", ProtocolVersion)
 	}
-	if RepositoryURL != "https://github.com/TIANLI0/THRM" {
+	if RepositoryURL != "https://github.com/ColdLemonTea/THRM" {
 		t.Fatalf("RepositoryURL = %q", RepositoryURL)
 	}
 	if LegacyAppName != "BS2PRO Controller" {
@@ -34,7 +34,7 @@ func TestSharedConstants(t *testing.T) {
 }
 
 func TestLatestReleaseURL(t *testing.T) {
-	want := "https://github.com/TIANLI0/THRM/releases/latest"
+	want := "https://github.com/ColdLemonTea/THRM/releases/latest"
 	if LatestReleaseURL != want {
 		t.Fatalf("LatestReleaseURL = %q, want %q", LatestReleaseURL, want)
 	}

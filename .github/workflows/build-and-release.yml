@@ -234,7 +234,7 @@ jobs:
   build-linux:
     needs: prepare-release
     if: needs.prepare-release.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
 
@@ -250,28 +250,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
-          bun-version: latest
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
 
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config \
-            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            build-essential clang cmake ninja-build pkg-config \
+            libgtk-3-dev libstdc++-12-dev \
             libhidapi-dev libudev-dev
-
-      - name: Cache frontend dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            frontend/node_modules
-            ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/package.json', 'frontend/bun.lock', 'frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
 
       - name: Build THRM (Linux)
         env:
@@ -297,16 +289,20 @@ jobs:
           [ -n "$VER" ] || VER="dev"
           echo "Packaging version: $VER"
 
-          ICON_SRC="frontend/public/brand/appicon.png"
+          BUNDLE="ui/build/linux/x64/release/bundle"
+          ICON_SRC="ui/assets/brand/appicon.png"
           RULES_SRC="scripts/99-flydigi-fan.rules"
           DIST="build/dist"
+          test -x "$BUNDLE/thrm"
+          test -d "$BUNDLE/data"
+          test -d "$BUNDLE/lib"
           rm -rf "$DIST" build/stage build/deb
           mkdir -p "$DIST"
 
           # ---------- Portable tarball ----------
           STAGE="build/stage/THRM-linux-amd64"
           mkdir -p "$STAGE"
-          install -Dm755 build/thrm "$STAGE/thrm"
+          cp -a "$BUNDLE/." "$STAGE/"
           install -Dm755 build/thrm-core "$STAGE/thrm-core"
           install -Dm755 scripts/install-portable.sh "$STAGE/install.sh"
           [ -f "$RULES_SRC" ] && install -Dm644 "$RULES_SRC" "$STAGE/99-flydigi-fan.rules"
@@ -323,11 +319,14 @@ jobs:
           echo "Debian version: $DEB_VER"
 
           PKGROOT="build/deb/thrm"
-          install -Dm755 build/thrm "$PKGROOT/usr/bin/thrm"
-          install -Dm755 build/thrm-core "$PKGROOT/usr/bin/thrm-core"
-          [ -f "$ICON_SRC" ] && install -Dm644 "$ICON_SRC" "$PKGROOT/usr/share/icons/hicolor/256x256/apps/thrm.png"
+          install -d "$PKGROOT/usr/lib/thrm" "$PKGROOT/usr/bin"
+          cp -a "$BUNDLE/." "$PKGROOT/usr/lib/thrm/"
+          install -Dm755 build/thrm-core "$PKGROOT/usr/lib/thrm/thrm-core"
+          ln -s ../lib/thrm/thrm "$PKGROOT/usr/bin/thrm"
+          ln -s ../lib/thrm/thrm-core "$PKGROOT/usr/bin/thrm-core"
+          [ -f "$ICON_SRC" ] && install -Dm644 "$ICON_SRC" "$PKGROOT/usr/share/icons/hicolor/256x256/apps/com.tianli0.thrm_ui.png"
           [ -f "$RULES_SRC" ] && install -Dm644 "$RULES_SRC" "$PKGROOT/usr/lib/udev/rules.d/99-flydigi-fan.rules"
-          install -Dm644 packaging/linux/thrm.desktop "$PKGROOT/usr/share/applications/thrm.desktop"
+          install -Dm644 packaging/linux/thrm.desktop "$PKGROOT/usr/share/applications/com.tianli0.thrm_ui.desktop"
 
           install -d "$PKGROOT/DEBIAN"
           cat > "$PKGROOT/DEBIAN/control" << EOF
@@ -336,9 +335,9 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
-          Depends: libgtk-3-0, libwebkit2gtk-4.1-0, libhidapi-hidraw0
+          Depends: libgtk-3-0, libstdc++6, libhidapi-hidraw0, pulseaudio-utils
           Recommends: bluez
-          Maintainer: TIANLI0 <wutianli@tianli0.top>
+          Maintainer: ColdLemonTea <me@lemonice.top>
           Description: THRM
            Flydigi BS series cooler and multi-brand fan controller.
           EOF
@@ -387,6 +386,7 @@ jobs:
           [ -n "$ARCH_VER" ] || ARCH_VER="0.0.0.dev"
           echo "Arch package version: $ARCH_VER"
           sed -i "s/^pkgver=.*/pkgver=$ARCH_VER/" PKGBUILD
+          tar -C ui/build/linux/x64/release -czf build/thrm-flutter-linux-bundle.tar.gz bundle
 
           BUILDER_UID=$(id -u)
           docker run --rm \

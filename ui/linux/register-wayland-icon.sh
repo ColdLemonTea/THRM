@@ -3,7 +3,10 @@ set -eu
 
 application_id=com.tianli0.thrm_ui
 bundle_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-data_dir=${XDG_DATA_HOME:-"$HOME/.local/share"}
+case ${XDG_DATA_HOME:-} in
+  /*) data_dir=$XDG_DATA_HOME ;;
+  *) data_dir=$HOME/.local/share ;;
+esac
 applications_dir=$data_dir/applications
 icons_dir=$data_dir/icons/hicolor/256x256/apps
 
@@ -15,8 +18,8 @@ install -m 644 \
 cat >"$applications_dir/$application_id.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=THRM Flutter Preview
-Exec="$bundle_dir/thrm_ui"
+Name=THRM
+Exec="$bundle_dir/thrm"
 Icon=$application_id
 Terminal=false
 Categories=Utility;
@@ -32,4 +35,4 @@ elif command -v kbuildsycoca5 >/dev/null 2>&1; then
   kbuildsycoca5 >/dev/null 2>&1 || true
 fi
 
-printf '%s\n' 'Wayland icon registered. Restart THRM Flutter Preview.'
+printf '%s\n' 'Wayland icon registered. Restart THRM.'

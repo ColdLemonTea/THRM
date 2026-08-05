@@ -44,6 +44,7 @@ jobs:
       - name: Verify Wayland desktop registration helper
         working-directory: ui
         run: |
+          test -x build/linux/x64/profile/bundle/thrm
           test_data_dir="$(mktemp -d)"
           XDG_DATA_HOME="$test_data_dir" \
             build/linux/x64/profile/bundle/register-wayland-icon.sh
@@ -51,6 +52,12 @@ jobs:
           test -f "$test_data_dir/icons/hicolor/256x256/apps/com.tianli0.thrm_ui.png"
           grep -q '^Icon=com.tianli0.thrm_ui$' \
             "$test_data_dir/applications/com.tianli0.thrm_ui.desktop"
+          grep -q '/thrm$' \
+            "$test_data_dir/applications/com.tianli0.thrm_ui.desktop"
+          test_home_dir="$(mktemp -d)"
+          HOME="$test_home_dir" XDG_DATA_HOME=relative \
+            build/linux/x64/profile/bundle/register-wayland-icon.sh
+          test -f "$test_home_dir/.local/share/applications/com.tianli0.thrm_ui.desktop"
 
       - name: Package bundle
         run: |

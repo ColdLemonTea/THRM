@@ -1220,7 +1220,7 @@ export default function AboutPanel() {
             <div className="p-2">
               <button
                 type="button"
-                onClick={() => openUrl('mailto:wutianli@tianli0.top')}
+                onClick={() => openUrl('mailto:me@lemonice.top')}
                 className={LINK_ROW_CLASS}
               >
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-muted/70 text-muted-foreground transition-colors group-hover:text-primary">
@@ -1231,7 +1231,7 @@ export default function AboutPanel() {
                     {t('aboutPanel.contact.email')}
                   </span>
                   <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                    wutianli@tianli0.top
+                    me@lemonice.top
                   </span>
                 </span>
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
@@ -1269,7 +1269,7 @@ export default function AboutPanel() {
                     {t('aboutPanel.contact.repository')}
                   </span>
                   <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                    github.com/TIANLI0/THRM
+                    github.com/ColdLemonTea/THRM
                   </span>
                 </span>
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
@@ -1288,7 +1288,7 @@ export default function AboutPanel() {
                     GitHub Issues
                   </span>
                   <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                    github.com/TIANLI0/THRM/issues
+                    github.com/ColdLemonTea/THRM/issues
                   </span>
                 </span>
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />

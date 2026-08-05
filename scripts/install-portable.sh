@@ -6,21 +6,32 @@ set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="${1:-$HOME/.local/bin}"
-DESKTOP_DIR="$HOME/.local/share/applications"
-ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
+case "${XDG_DATA_HOME:-}" in
+    /*) DATA_HOME="$XDG_DATA_HOME" ;;
+    *) DATA_HOME="$HOME/.local/share" ;;
+esac
+APP_DIR="${THRM_APP_DIR:-$DATA_HOME/thrm}"
+DESKTOP_DIR="$DATA_HOME/applications"
+ICON_DIR="$DATA_HOME/icons/hicolor/256x256/apps"
 UDEV_RULES_DIR="/etc/udev/rules.d"
+APPLICATION_ID="com.tianli0.thrm_ui"
 
 echo "=== THRM — Install ==="
 
-# 1. Install binaries
-echo "--- Installing binaries to $INSTALL_DIR ---"
-install -Dm755 "$HERE/thrm" "$INSTALL_DIR/thrm"
-install -Dm755 "$HERE/thrm-core" "$INSTALL_DIR/thrm-core"
+# 1. Install the Flutter bundle and command links
+echo "--- Installing application to $APP_DIR ---"
+install -d "$APP_DIR/data" "$APP_DIR/lib" "$INSTALL_DIR"
+install -m755 "$HERE/thrm" "$APP_DIR/thrm"
+install -m755 "$HERE/thrm-core" "$APP_DIR/thrm-core"
+cp -a "$HERE/data/." "$APP_DIR/data/"
+cp -a "$HERE/lib/." "$APP_DIR/lib/"
+ln -sfn "$APP_DIR/thrm" "$INSTALL_DIR/thrm"
+ln -sfn "$APP_DIR/thrm-core" "$INSTALL_DIR/thrm-core"
 
 # 2. Install application icon
 if [ -f "$HERE/appicon.png" ]; then
     echo "--- Installing application icon ---"
-    install -Dm644 "$HERE/appicon.png" "$ICON_DIR/thrm.png"
+    install -Dm644 "$HERE/appicon.png" "$ICON_DIR/$APPLICATION_ID.png"
 else
     echo "WARNING: appicon.png not found, skipping icon"
 fi
@@ -29,16 +40,16 @@ fi
 # StartupWMClass 让任务栏把窗口归到这个图标下。
 echo "--- Creating desktop entry ---"
 mkdir -p "$DESKTOP_DIR"
-cat > "$DESKTOP_DIR/thrm.desktop" << EOF
+cat > "$DESKTOP_DIR/$APPLICATION_ID.desktop" << EOF
 [Desktop Entry]
 Type=Application
 Name=THRM
 Comment=Flydigi BS Series Fan Controller
 Exec="$INSTALL_DIR/thrm"
-Icon=thrm
+Icon=$APPLICATION_ID
 Terminal=false
 Categories=Utility;
-StartupWMClass=thrm
+StartupWMClass=$APPLICATION_ID
 EOF
 
 # 4. Install udev rules — 缺了它普通用户读写 /dev/hidraw* 会被拒绝，只能 sudo 运行。

@@ -6348,14 +6348,15 @@ const _appVersion = String.fromEnvironment(
   'THRM_VERSION',
   defaultValue: '0.1.0',
 );
-const _repositoryUrl = 'https://github.com/TIANLI0/THRM';
-const _latestReleaseUrl = 'https://github.com/TIANLI0/THRM/releases/latest';
+const _repositoryUrl = 'https://github.com/ColdLemonTea/THRM';
+const _latestReleaseUrl =
+    'https://github.com/ColdLemonTea/THRM/releases/latest';
 const _latestReleaseApiUrl =
-    'https://api.github.com/repos/TIANLI0/THRM/releases/latest';
+    'https://api.github.com/repos/ColdLemonTea/THRM/releases/latest';
 const _releasesApiUrl =
-    'https://api.github.com/repos/TIANLI0/THRM/releases?per_page=30';
+    'https://api.github.com/repos/ColdLemonTea/THRM/releases?per_page=30';
 const _creditsUrl =
-    'https://raw.githubusercontent.com/TIANLI0/THRM/main/credits.json';
+    'https://raw.githubusercontent.com/ColdLemonTea/THRM/main/credits.json';
 
 typedef ReleaseInfo = ({
   String tag,
@@ -6396,7 +6397,7 @@ Future<ReleaseInfo> _fetchLatestRelease(bool prerelease) async {
     final url =
         uri?.scheme == 'https' &&
             uri?.host == 'github.com' &&
-            uri!.path.startsWith('/TIANLI0/THRM/releases/')
+            uri!.path.startsWith('/ColdLemonTea/THRM/releases/')
         ? rawUrl
         : _latestReleaseUrl;
     var installerUrl = '';
@@ -6783,7 +6784,7 @@ class _AboutPageState extends State<AboutPage> {
                 ),
               ),
               fluent.Button(
-                onPressed: () => _open('mailto:wutianli@tianli0.top'),
+                onPressed: () => _open('mailto:me@lemonice.top'),
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

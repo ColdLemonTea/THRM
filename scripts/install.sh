@@ -4,26 +4,37 @@
 set -e
 
 INSTALL_DIR="${1:-$HOME/.local/bin}"
-DESKTOP_DIR="$HOME/.local/share/applications"
-ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
+case "${XDG_DATA_HOME:-}" in
+    /*) DATA_HOME="$XDG_DATA_HOME" ;;
+    *) DATA_HOME="$HOME/.local/share" ;;
+esac
+APP_DIR="${THRM_APP_DIR:-$DATA_HOME/thrm}"
+DESKTOP_DIR="$DATA_HOME/applications"
+ICON_DIR="$DATA_HOME/icons/hicolor/256x256/apps"
 UDEV_RULES_DIR="/etc/udev/rules.d"
+APPLICATION_ID="com.tianli0.thrm_ui"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 echo "=== THRM — Install ==="
 
-# 1. Install binaries
-echo "--- Installing binaries to $INSTALL_DIR ---"
-mkdir -p "$INSTALL_DIR"
-install -Dm755 "$PROJECT_ROOT/build/thrm" "$INSTALL_DIR/thrm"
-install -Dm755 "$PROJECT_ROOT/build/thrm-core" "$INSTALL_DIR/thrm-core"
+# 1. Install the Flutter bundle and command links
+BUNDLE_DIR="$PROJECT_ROOT/ui/build/linux/x64/release/bundle"
+echo "--- Installing application to $APP_DIR ---"
+install -d "$APP_DIR/data" "$APP_DIR/lib" "$INSTALL_DIR"
+install -m755 "$BUNDLE_DIR/thrm" "$APP_DIR/thrm"
+install -m755 "$PROJECT_ROOT/build/thrm-core" "$APP_DIR/thrm-core"
+cp -a "$BUNDLE_DIR/data/." "$APP_DIR/data/"
+cp -a "$BUNDLE_DIR/lib/." "$APP_DIR/lib/"
+ln -sfn "$APP_DIR/thrm" "$INSTALL_DIR/thrm"
+ln -sfn "$APP_DIR/thrm-core" "$INSTALL_DIR/thrm-core"
 
 # 2. Install application icon
-ICON_SRC="$PROJECT_ROOT/frontend/public/brand/appicon.png"
+ICON_SRC="$PROJECT_ROOT/ui/assets/brand/appicon.png"
 if [ -f "$ICON_SRC" ]; then
     echo "--- Installing application icon ---"
     mkdir -p "$ICON_DIR"
-    install -Dm644 "$ICON_SRC" "$ICON_DIR/thrm.png"
+    install -Dm644 "$ICON_SRC" "$ICON_DIR/$APPLICATION_ID.png"
 else
     echo "WARNING: $ICON_SRC not found, skipping icon"
 fi
@@ -32,16 +43,16 @@ fi
 # StartupWMClass 让任务栏把窗口归到这个图标下。
 echo "--- Creating desktop entry ---"
 mkdir -p "$DESKTOP_DIR"
-cat > "$DESKTOP_DIR/thrm.desktop" << EOF
+cat > "$DESKTOP_DIR/$APPLICATION_ID.desktop" << EOF
 [Desktop Entry]
 Type=Application
 Name=THRM
 Comment=Flydigi BS Series Fan Controller
 Exec="$INSTALL_DIR/thrm"
-Icon=thrm
+Icon=$APPLICATION_ID
 Terminal=false
 Categories=Utility;
-StartupWMClass=thrm
+StartupWMClass=$APPLICATION_ID
 EOF
 
 # 4. Install udev rules — 缺了它普通用户读写 /dev/hidraw* 会被拒绝，只能 sudo 运行。

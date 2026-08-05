@@ -396,7 +396,7 @@ void main() {
             releaseChecks++;
             return (
               tag: 'v0.1.0',
-              url: 'https://github.com/TIANLI0/THRM/releases/latest',
+              url: 'https://github.com/ColdLemonTea/THRM/releases/latest',
               body: '',
               installerUrl: '',
               prerelease: false,
