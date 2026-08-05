@@ -6,6 +6,15 @@ does not replace the Go Core, `THRM-IPC`, configuration storage, or
 
 ## Build and checks
 
+On CachyOS/Linux, use the one-command runner from the repository root:
+
+```bash
+./scripts/run-avalonia-linux.sh
+```
+
+It publishes the Avalonia GUI and places a freshly built `thrm-core` beside it,
+so the GUI can either attach to an existing Core or launch the bundled one.
+
 From the repository root on Windows:
 
 ```powershell

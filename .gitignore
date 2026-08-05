@@ -5,6 +5,7 @@ build/stage
 build/release-context
 build/thrm
 build/thrm-core
+build/avalonia-*
 /pkg/
 /src/
 /*.pkg.tar.*
