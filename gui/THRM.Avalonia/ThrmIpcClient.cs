@@ -129,6 +129,15 @@ public sealed class ThrmIpcClient : IDisposable
     public Task<bool> QuitCoreAsync(CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("QuitApp", null, cancellationToken);
 
+    public Task<bool> ConnectDeviceAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("Connect", null, cancellationToken);
+
+    public Task<bool> DisconnectDeviceAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("Disconnect", null, cancellationToken);
+
+    public Task<bool> SetAutoControlAsync(bool enabled, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetAutoControl", new { enabled }, cancellationToken);
+
     private async Task<T> SendRequestAsync<T>(string type, object? data, CancellationToken cancellationToken)
     {
         Stream stream;
@@ -565,6 +574,32 @@ internal static class IpcProtocolSelfCheck
         if (!line.EndsWith('\n') || !line.Contains("\"type\":\"Ping\"", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Request framing check failed.");
+        }
+
+        using var connectRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("Connect", null, "self-check-connect"));
+        if (connectRequest.RootElement.GetProperty("type").GetString() != "Connect")
+        {
+            throw new InvalidOperationException("Connect request check failed.");
+        }
+
+        using var disconnectRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("Disconnect", null, "self-check-disconnect"));
+        if (disconnectRequest.RootElement.GetProperty("type").GetString() != "Disconnect")
+        {
+            throw new InvalidOperationException("Disconnect request check failed.");
+        }
+
+        using var autoControlRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetAutoControl", new { enabled = true }, "self-check-auto"));
+        var autoControlData = autoControlRequest.RootElement.GetProperty("data");
+        if (autoControlRequest.RootElement.GetProperty("type").GetString() != "SetAutoControl"
+            || autoControlData.ValueKind != JsonValueKind.Object
+            || autoControlData.EnumerateObject().Count() != 1
+            || !autoControlData.TryGetProperty("enabled", out var enabled)
+            || enabled.ValueKind != JsonValueKind.True)
+        {
+            throw new InvalidOperationException("SetAutoControl request check failed.");
         }
 
         var response = JsonSerializer.Deserialize<IpcMessage>(

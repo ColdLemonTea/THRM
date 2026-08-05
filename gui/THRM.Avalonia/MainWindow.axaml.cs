@@ -10,6 +10,11 @@ public partial class MainWindow : Window
     private readonly ThrmIpcClient _ipc = new();
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _recoveryLoop;
+    private bool _deviceConnected;
+    private bool _deviceStateKnown;
+    private bool _autoControl;
+    private bool _configKnown;
+    private bool _writeInProgress;
 
     public MainWindow()
     {
@@ -94,6 +99,26 @@ public partial class MainWindow : Window
 
     private async void RefreshClick(object? sender, RoutedEventArgs e) => await RefreshStateAsync();
 
+    private async void ConnectDeviceClick(object? sender, RoutedEventArgs e) =>
+        await RunWriteAsync("Connect device", () => _ipc.ConnectDeviceAsync(_lifetime.Token));
+
+    private async void DisconnectDeviceClick(object? sender, RoutedEventArgs e) =>
+        await RunWriteAsync("Disconnect device", () => _ipc.DisconnectDeviceAsync(_lifetime.Token));
+
+    private async void AutoControlClick(object? sender, RoutedEventArgs e)
+    {
+        if (_writeInProgress || !_ipc.IsConnected || !_configKnown)
+        {
+            AutoControlSwitch.IsChecked = _autoControl;
+            return;
+        }
+
+        var enabled = AutoControlSwitch.IsChecked == true;
+        AutoControlSwitch.IsChecked = _autoControl;
+        var action = enabled ? "Enable auto control" : "Disable auto control";
+        await RunWriteAsync(action, () => _ipc.SetAutoControlAsync(enabled, _lifetime.Token));
+    }
+
     private async void ShowWindowClick(object? sender, RoutedEventArgs e)
     {
         try
@@ -120,11 +145,58 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RefreshStateAsync()
+    private async Task RunWriteAsync(string action, Func<Task<bool>> request)
+    {
+        if (_writeInProgress)
+        {
+            return;
+        }
+
+        if (!_ipc.IsConnected)
+        {
+            StatusText.Text = $"{action} unavailable: THRM Core is not connected; known state retained.";
+            return;
+        }
+
+        _writeInProgress = true;
+        SetActionAvailability();
+        StatusText.Text = $"{action} in progress...";
+        try
+        {
+            if (!await request())
+            {
+                StatusText.Text = $"{action} was rejected; known state retained.";
+                return;
+            }
+
+            if (await RefreshStateAsync())
+            {
+                StatusText.Text = $"{action} succeeded; state synchronized.";
+            }
+            else
+            {
+                StatusText.Text = $"{action} accepted, but state was not synchronized; known state retained.";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"{action} failed: {ex.Message}; known state retained.";
+        }
+        finally
+        {
+            _writeInProgress = false;
+            SetActionAvailability();
+        }
+    }
+
+    private async Task<bool> RefreshStateAsync()
     {
         if (!_ipc.IsConnected)
         {
-            return;
+            _deviceStateKnown = false;
+            _configKnown = false;
+            SetActionAvailability();
+            return false;
         }
 
         try
@@ -135,12 +207,20 @@ public partial class MainWindow : Window
             await Task.WhenAll(pingTask, configTask, statusTask);
             ApplyConfig(configTask.Result);
             ApplyDeviceStatus(statusTask.Result);
+            _configKnown = true;
+            _deviceStateKnown = true;
+            SetActionAvailability();
             StatusText.Text = "Core state synchronized";
             LastUpdateText.Text = $"Last update: {DateTime.Now:HH:mm:ss}";
+            return true;
         }
         catch (Exception ex)
         {
+            _deviceStateKnown = false;
+            _configKnown = false;
+            SetActionAvailability();
             StatusText.Text = $"State refresh failed: {ex.Message}";
+            return false;
         }
     }
 
@@ -148,18 +228,26 @@ public partial class MainWindow : Window
     {
         ConnectionText.Text = connected ? "Connected" : "Disconnected — recovering";
         ConnectionDot.Fill = connected ? Brushes.LimeGreen : Brushes.DarkOrange;
+        _deviceStateKnown = false;
+        _configKnown = false;
         if (!connected)
         {
-            DeviceText.Text = "Disconnected";
             StatusText.Text = "Core connection lost; retrying without replaying writes";
         }
+
+        SetActionAvailability();
     }
 
-    private void ApplyConfig(ConfigSnapshot config) =>
-        AutoControlText.Text = config.AutoControl ? "Enabled" : "Disabled";
+    private void ApplyConfig(ConfigSnapshot config)
+    {
+        _autoControl = config.AutoControl;
+        AutoControlSwitch.IsChecked = _autoControl;
+        AutoControlText.Text = _autoControl ? "Enabled" : "Disabled";
+    }
 
     private void ApplyDeviceStatus(DeviceStatusSnapshot status)
     {
+        _deviceConnected = status.Connected;
         DeviceText.Text = status.Connected ? "Connected" : "Disconnected";
         ModelText.Text = $"Model {EmptyDash(status.Model)}";
         ProductText.Text = $"Product ID {EmptyDash(status.ProductId)}";
@@ -192,6 +280,14 @@ public partial class MainWindow : Window
 
     private void ApplyFanData(FanDataSnapshot fanData) =>
         FanText.Text = $"Fan {fanData.CurrentRpm} RPM → {fanData.TargetRpm} RPM";
+
+    private void SetActionAvailability()
+    {
+        var canChangeDevice = _ipc.IsConnected && _deviceStateKnown && !_writeInProgress;
+        ConnectDeviceButton.IsEnabled = canChangeDevice && !_deviceConnected;
+        DisconnectDeviceButton.IsEnabled = canChangeDevice && _deviceConnected;
+        AutoControlSwitch.IsEnabled = _ipc.IsConnected && _configKnown && !_writeInProgress;
+    }
 
     private static string EmptyDash(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
