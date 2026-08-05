@@ -52,6 +52,78 @@ void main() {
     expect(original['autoControl'], isTrue);
   });
 
+  test('control inputs are normalized before reaching Core', () {
+    expect(
+      app.normalizeLightStripConfig({
+        'mode': 'invalid',
+        'speed': 'fast',
+        'brightness': 120,
+        'colors': [
+          {'r': -1, 'g': 128, 'b': 300},
+        ],
+      }),
+      {
+        'mode': 'smart_temp',
+        'speed': 'fast',
+        'brightness': 100,
+        'colors': [
+          {'r': 0, 'g': 128, 'b': 255},
+          {'r': 0, 'g': 255, 'b': 0},
+          {'r': 0, 'g': 128, 'b': 255},
+        ],
+      },
+    );
+    expect(app.normalizeHotkey('shift + CTRL + f12'), 'Ctrl+Shift+F12');
+    expect(app.normalizeHotkey('F12'), isNull);
+    expect(app.parseDeviceDebugCommand('5A A5 27 02 29'), 0x27);
+    expect(app.parseDeviceDebugCommand('GG'), isNull);
+    expect(app.isLatestVersion('v1.2.3', 'v1.2.2'), isTrue);
+    expect(app.isLatestVersion('v1.2.3', 'v1.3.0'), isFalse);
+  });
+
+  test('control IPC updates preserve unknown config fields', () async {
+    final client = _RecordingIpcClient();
+    final controller = AppController(client: client)
+      ..config = {
+        'gearLight': false,
+        'unknown': {'preserved': true},
+      };
+    addTearDown(controller.dispose);
+
+    expect(
+      await controller.runControlRequest(
+        'SetGearLight',
+        data: {'enabled': true},
+        configPatch: {'gearLight': true},
+      ),
+      isTrue,
+    );
+    const light = {
+      'mode': 'static_single',
+      'speed': 'medium',
+      'brightness': 80,
+      'colors': [
+        {'r': 12, 'g': 34, 'b': 56},
+      ],
+    };
+    expect(
+      await controller.runControlRequest(
+        'SetLightStrip',
+        data: {'config': light},
+        configPatch: const {'lightStrip': light},
+      ),
+      isTrue,
+    );
+    expect(client.requests.map((request) => request.type), [
+      'SetGearLight',
+      'SetLightStrip',
+    ]);
+    expect(client.requests[0].data, {'enabled': true});
+    expect(client.requests[1].data, {'config': light});
+    expect(controller.config?['gearLight'], isTrue);
+    expect(controller.config?['unknown'], {'preserved': true});
+  });
+
   test('fan curve parser enforces the Core ordering contract', () {
     expect(
       app.readFanCurve([
@@ -271,10 +343,23 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final semantics = tester.ensureSemantics();
     final controller = AppController();
+    var releaseChecks = 0;
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(
-      _fluentTestApp(app.ThrmShell(controller: controller)),
+      _fluentTestApp(
+        app.ThrmShell(
+          controller: controller,
+          fetchLatestRelease: () async {
+            releaseChecks++;
+            return (
+              tag: 'v0.1.0',
+              url: 'https://github.com/TIANLI0/THRM/releases/latest',
+              body: '',
+            );
+          },
+        ),
+      ),
     );
     expect(find.text('THRM · 状态'), findsNothing);
     expect(find.text('Core 离线'), findsNothing);
@@ -296,6 +381,11 @@ void main() {
       closeTo(compactItemCenters[1] - compactItemCenters.first, 0.1),
     );
     expect(tester.getSize(pane).width, 50);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('navigation-about-gap'))).height,
+      3,
+    );
+    expect(releaseChecks, 0);
     for (var index = 0; index < 7; index++) {
       await tester.tap(paneToggle);
       await tester.pump();
@@ -330,7 +420,8 @@ void main() {
     );
     await tester.tap(find.byIcon(fluent.FluentIcons.info).last);
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('Flutter 3 渲染实验'), findsOneWidget);
+    expect(find.byKey(const ValueKey('about-check-update')), findsOneWidget);
+    expect(releaseChecks, 1);
     expect(tester.takeException(), isNull);
     semantics.dispose();
   });
@@ -386,6 +477,158 @@ void main() {
           .checked,
       isTrue,
     );
+  });
+
+  testWidgets('control page selects sensors and records hotkeys', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = _RecordingIpcClient();
+    final controller = AppController(client: client)
+      ..connection = CoreConnection.connected
+      ..deviceConnected = true
+      ..deviceStatus = {'model': 'BS2PRO'}
+      ..config = {
+        'lightStrip': {
+          'mode': 'off',
+          'speed': 'medium',
+          'brightness': 100,
+          'colors': [],
+        },
+        'customSpeedRPM': 2000,
+        'legionFnQSupport': {'supported': false},
+        'manualGearToggleHotkey': 'Ctrl+M',
+        'themeMode': 'system',
+        'unknown': {'preserved': true},
+      }
+      ..temperature = {
+        'cpuModel': 'Test CPU',
+        'cpuSensors': [
+          {'key': 'average', 'name': 'Core Average', 'value': 41},
+          {'key': 'core-0', 'name': 'P-Core #0', 'value': 36},
+        ],
+        'gpuDevices': [],
+        'gpuSensors': [],
+      };
+    final scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      _fluentTestApp(
+        app.ControlPage(
+          controller: controller,
+          scrollController: scrollController,
+        ),
+      ),
+    );
+    Future<void> scrollTo(Finder finder) async {
+      for (var index = 0; index < 20 && finder.evaluate().isEmpty; index++) {
+        final position = scrollController.position;
+        scrollController.jumpTo(
+          (position.pixels + 420).clamp(0.0, position.maxScrollExtent),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(finder, findsOneWidget);
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+    }
+
+    final sensors = find.byKey(const ValueKey('control-cpu-sensors'));
+    await scrollTo(sensors);
+    final temperatureSource = find.byKey(
+      const ValueKey('control-temperature-source'),
+    );
+    expect(
+      tester.getSize(sensors).width,
+      tester.getSize(temperatureSource).width,
+    );
+    expect(
+      tester.widget<fluent.ComboBox<String>>(temperatureSource).iconSize,
+      12,
+    );
+    final sensorArrow = find.descendant(
+      of: sensors,
+      matching: find.byType(fluent.WindowsIcon),
+    );
+    expect(sensorArrow, findsOneWidget);
+    expect(tester.widget<fluent.WindowsIcon>(sensorArrow).size, 12);
+    final gpuSensor = find.descendant(
+      of: find.widgetWithText(fluent.InfoLabel, 'GPU 传感器'),
+      matching: find.byWidgetPredicate((widget) => widget is fluent.ComboBox),
+    );
+    final temperatureCard = find.ancestor(
+      of: temperatureSource,
+      matching: find.byType(fluent.Card),
+    );
+    expect(gpuSensor, findsOneWidget);
+    expect(temperatureCard, findsOneWidget);
+    expect(
+      tester.getRect(temperatureCard).bottom - tester.getRect(gpuSensor).bottom,
+      greaterThanOrEqualTo(16),
+    );
+    await tester.tap(sensors);
+    await tester.pumpAndSettle();
+    expect(find.text('自动选择（推荐）'), findsOneWidget);
+    expect(find.text('Core Average (41°C)'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('control-cpu-sensor-average')));
+    await tester.tap(find.byKey(const ValueKey('control-cpu-sensor-core-0')));
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    expect(client.requests, hasLength(1));
+    expect(client.requests.single.type, 'UpdateConfig');
+    expect((client.requests.single.data as Map)['cpuSensors'], [
+      'average',
+      'core-0',
+    ]);
+    expect((client.requests.single.data as Map)['unknown'], {
+      'preserved': true,
+    });
+
+    final recorder = find.byKey(const ValueKey('control-hotkey-manual'));
+    await scrollTo(recorder);
+    expect(find.text('点击录制'), findsNothing);
+    final textBox = find.descendant(
+      of: recorder,
+      matching: find.byType(fluent.TextBox),
+    );
+    final clearHotkey = find.descendant(
+      of: recorder,
+      matching: find.byKey(const ValueKey('hotkey-clear')),
+    );
+    expect(clearHotkey, findsOneWidget);
+    final textBoxRect = tester.getRect(textBox);
+    final clearHotkeyRect = tester.getRect(clearHotkey);
+    expect(clearHotkeyRect.size, const Size.square(24));
+    expect(clearHotkeyRect.top, greaterThan(textBoxRect.top));
+    expect(clearHotkeyRect.right, lessThan(textBoxRect.right));
+    expect(clearHotkeyRect.bottom, lessThan(textBoxRect.bottom));
+    await tester.tap(clearHotkey);
+    await tester.pump();
+    expect(tester.widget<fluent.TextBox>(textBox).controller?.text, isEmpty);
+    await tester.tap(recorder);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(
+      tester.widget<fluent.TextBox>(textBox).controller?.text,
+      'Ctrl+Alt+M',
+    );
+
+    final save = find.byKey(const ValueKey('control-hotkeys-save'));
+    await scrollTo(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final request = client.requests.last;
+    expect(request.type, 'UpdateConfig');
+    expect((request.data as Map)['manualGearToggleHotkey'], 'Ctrl+Alt+M');
+    expect((request.data as Map)['unknown'], {'preserved': true});
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('curve page renders the Core curve', (tester) async {

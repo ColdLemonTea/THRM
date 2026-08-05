@@ -1,8 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:fluent_ui/fluent_ui.dart' as fluent;
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, listEquals;
+    show TargetPlatform, defaultTargetPlatform, listEquals, setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -24,6 +26,12 @@ fluent.FluentThemeData _fluentTheme(Brightness brightness) {
         : null,
   );
 }
+
+ThemeMode _themeMode(Object? value) => switch (value) {
+  'light' => ThemeMode.light,
+  'dark' => ThemeMode.dark,
+  _ => ThemeMode.system,
+};
 
 class ThrmApp extends StatefulWidget {
   const ThrmApp({super.key});
@@ -49,17 +57,20 @@ class _ThrmAppState extends State<ThrmApp> {
 
   @override
   Widget build(BuildContext context) {
-    return fluent.FluentApp(
-      title: 'THRM',
-      debugShowCheckedModeBanner: false,
-      locale: const Locale('zh', 'CN'),
-      supportedLocales: const [Locale('zh', 'CN')],
-      themeMode: ThemeMode.system,
-      theme: _fluentTheme(Brightness.light),
-      darkTheme: _fluentTheme(Brightness.dark),
-      builder: (_, child) =>
-          ScaffoldMessenger(child: child ?? const SizedBox.shrink()),
-      home: ThrmShell(controller: controller),
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) => fluent.FluentApp(
+        title: 'THRM',
+        debugShowCheckedModeBanner: false,
+        locale: const Locale('zh', 'CN'),
+        supportedLocales: const [Locale('zh', 'CN')],
+        themeMode: _themeMode(controller.config?['themeMode']),
+        theme: _fluentTheme(Brightness.light),
+        darkTheme: _fluentTheme(Brightness.dark),
+        builder: (_, child) =>
+            ScaffoldMessenger(child: child ?? const SizedBox.shrink()),
+        home: ThrmShell(controller: controller),
+      ),
     );
   }
 }
@@ -407,9 +418,14 @@ const _fluentPageIcons = [
 ];
 
 class ThrmShell extends StatefulWidget {
-  const ThrmShell({required this.controller, super.key});
+  const ThrmShell({
+    required this.controller,
+    this.fetchLatestRelease = _fetchLatestRelease,
+    super.key,
+  });
 
   final AppController controller;
+  final Future<ReleaseInfo> Function() fetchLatestRelease;
 
   @override
   State<ThrmShell> createState() => _ThrmShellState();
@@ -420,12 +436,14 @@ class _ThrmShellState extends State<ThrmShell> {
   bool paneExpanded = false;
   final statusScrollController = SmoothScrollController();
   final curveScrollController = SmoothScrollController();
+  final controlScrollController = SmoothScrollController();
   final aboutScrollController = SmoothScrollController();
 
   @override
   void dispose() {
     statusScrollController.dispose();
     curveScrollController.dispose();
+    controlScrollController.dispose();
     aboutScrollController.dispose();
     super.dispose();
   }
@@ -433,6 +451,14 @@ class _ThrmShellState extends State<ThrmShell> {
   @override
   Widget build(BuildContext context) {
     final selected = page.index;
+    fluent.PaneItem paneItem(int index) => fluent.PaneItem(
+      icon: Icon(
+        _fluentPageIcons[index],
+        key: ValueKey('navigation-item-$index'),
+      ),
+      title: Text(_pageLabels[index]),
+      body: _page(ThrmPage.values[index]),
+    );
     final view = fluent.NavigationView(
       pane: fluent.NavigationPane(
         key: const ValueKey('navigation-pane'),
@@ -449,16 +475,14 @@ class _ThrmShellState extends State<ThrmShell> {
         displayMode: fluent.PaneDisplayMode.expanded,
         toggleable: false,
         size: fluent.NavigationPaneSize(openWidth: paneExpanded ? 180 : 50),
-        items: [
-          for (var index = 0; index < ThrmPage.values.length; index++)
-            fluent.PaneItem(
-              icon: Icon(
-                _fluentPageIcons[index],
-                key: ValueKey('navigation-item-$index'),
-              ),
-              title: Text(_pageLabels[index]),
-              body: _page(ThrmPage.values[index]),
-            ),
+        items: [for (var index = 0; index < 3; index++) paneItem(index)],
+        footerItems: [
+          paneItem(ThrmPage.about.index),
+          fluent.PaneItemWidgetAdapter(
+            key: const ValueKey('navigation-about-gap'),
+            applyPadding: false,
+            child: const SizedBox(height: 3),
+          ),
         ],
       ),
     );
@@ -478,12 +502,14 @@ class _ThrmShellState extends State<ThrmShell> {
       controller: widget.controller,
       scrollController: curveScrollController,
     ),
-    ThrmPage.control => const PlaceholderPage(
-      icon: Icons.tune,
-      title: '控制页',
-      message: '硬件控制仍由现有 Go Core 负责。',
+    ThrmPage.control => ControlPage(
+      controller: widget.controller,
+      scrollController: controlScrollController,
     ),
-    ThrmPage.about => RenderingLabPage(scrollController: aboutScrollController),
+    ThrmPage.about => AboutPage(
+      scrollController: aboutScrollController,
+      fetchLatestRelease: widget.fetchLatestRelease,
+    ),
   };
 }
 
@@ -1343,6 +1369,7 @@ class _FanCurvePageState extends State<FanCurvePage> {
                               key: const ValueKey('fan-curve-profile-selector'),
                               value: selectedProfileId,
                               isExpanded: true,
+                              iconSize: _comboBoxIconSize,
                               items: [
                                 for (final profile in profiles)
                                   fluent.ComboBoxItem(
@@ -1664,6 +1691,7 @@ class _CurveFeatureCard extends StatelessWidget {
     required this.description,
     required this.trailing,
     this.child,
+    this.childPadding = const EdgeInsets.all(16),
   });
 
   final IconData icon;
@@ -1671,6 +1699,7 @@ class _CurveFeatureCard extends StatelessWidget {
   final String description;
   final Widget trailing;
   final Widget? child;
+  final EdgeInsetsGeometry childPadding;
 
   @override
   Widget build(BuildContext context) {
@@ -1713,7 +1742,7 @@ class _CurveFeatureCard extends StatelessWidget {
           ),
           if (child != null) ...[
             const fluent.Divider(),
-            Padding(padding: const EdgeInsets.all(16), child: child),
+            Padding(padding: childPadding, child: child),
           ],
         ],
       ),
@@ -1751,6 +1780,11 @@ class _AutoControlCard extends StatelessWidget {
     ),
   );
 }
+
+const _settingRowsPadding = EdgeInsets.symmetric(horizontal: 16);
+const _settingContentPadding = EdgeInsets.fromLTRB(16, 0, 16, 16);
+const _settingControlWidth = 180.0;
+const _comboBoxIconSize = 12.0;
 
 class _ManualGearCard extends StatelessWidget {
   const _ManualGearCard({
@@ -1937,7 +1971,7 @@ class _ManualGearRpmDialogState extends State<_ManualGearRpmDialog> {
                   ],
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 16),
             ],
           ],
         ),
@@ -2049,6 +2083,7 @@ class _LearningCard extends StatelessWidget {
         semanticLabel: '自适应学习',
         onChanged: enabled ? (value) => onUpdate({'learning': value}) : null,
       ),
+      childPadding: _settingContentPadding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2094,11 +2129,12 @@ class _LearningCard extends StatelessWidget {
             title: '学习倾向',
             description: biasDescription,
             trailing: SizedBox(
-              width: 160,
+              width: _settingControlWidth,
               height: 34,
               child: fluent.ComboBox<String>(
                 value: bias,
                 isExpanded: true,
+                iconSize: _comboBoxIconSize,
                 items: const [
                   fluent.ComboBoxItem(value: 'balanced', child: Text('均衡')),
                   fluent.ComboBoxItem(value: 'cooling', child: Text('散热优先')),
@@ -2651,6 +2687,7 @@ class _ScheduleRuleCardState extends State<_ScheduleRuleCard> {
                   child: fluent.ComboBox<String>(
                     value: widget.rule['curveProfileId'] as String,
                     isExpanded: true,
+                    iconSize: _comboBoxIconSize,
                     items: [
                       for (final profile in widget.profiles)
                         fluent.ComboBoxItem(
@@ -3340,6 +3377,7 @@ class _TemperatureHistoryCardState extends State<_TemperatureHistoryCard> {
                       key: const ValueKey('temperature-history-retention'),
                       value: snapshot.retentionHours,
                       isExpanded: true,
+                      iconSize: _comboBoxIconSize,
                       items: [
                         for (final hours in retentionOptions)
                           fluent.ComboBoxItem(
@@ -4059,152 +4097,2037 @@ void _paintChartLabel(
   );
 }
 
-class PlaceholderPage extends StatelessWidget {
-  const PlaceholderPage({
-    required this.icon,
-    required this.title,
-    required this.message,
+const _lightModes = <({String value, String label})>[
+  (value: 'off', label: '关闭'),
+  (value: 'smart_temp', label: '智能温度'),
+  (value: 'static_single', label: '单色常亮'),
+  (value: 'static_multi', label: '多色常亮'),
+  (value: 'rotation', label: '旋转'),
+  (value: 'flowing', label: '流水'),
+  (value: 'breathing', label: '呼吸'),
+];
+
+const _lightSpeeds = <({String value, String label})>[
+  (value: 'fast', label: '快速'),
+  (value: 'medium', label: '中速'),
+  (value: 'slow', label: '慢速'),
+];
+
+const _defaultLightColors = <Map<String, int>>[
+  {'r': 255, 'g': 0, 'b': 0},
+  {'r': 0, 'g': 255, 'b': 0},
+  {'r': 0, 'g': 128, 'b': 255},
+];
+
+Map<String, dynamic> normalizeLightStripConfig(Object? raw) {
+  final source = _stringMap(raw) ?? const <String, dynamic>{};
+  final mode = source['mode']?.toString() ?? 'smart_temp';
+  final speed = source['speed']?.toString() ?? 'medium';
+  final colors = <Map<String, int>>[];
+  final rawColors = source['colors'];
+  if (rawColors is List) {
+    for (final rawColor in rawColors.take(3)) {
+      final color = _stringMap(rawColor);
+      if (color == null) continue;
+      int channel(String key) =>
+          (color[key] is num ? (color[key] as num).round() : 0).clamp(0, 255);
+      colors.add({'r': channel('r'), 'g': channel('g'), 'b': channel('b')});
+    }
+  }
+  while (colors.length < 3) {
+    colors.add(Map<String, int>.from(_defaultLightColors[colors.length]));
+  }
+  return {
+    'mode': _lightModes.any((item) => item.value == mode) ? mode : 'smart_temp',
+    'speed': _lightSpeeds.any((item) => item.value == speed) ? speed : 'medium',
+    'brightness':
+        (source['brightness'] is num
+                ? (source['brightness'] as num).round()
+                : 100)
+            .clamp(0, 100),
+    'colors': colors,
+  };
+}
+
+int requiredLightColorCount(String mode) => switch (mode) {
+  'off' || 'smart_temp' || 'flowing' => 0,
+  'static_single' => 1,
+  _ => 3,
+};
+
+String? normalizeHotkey(String raw) {
+  final value = raw.trim();
+  if (value.isEmpty) return '';
+  final parts = value.split('+').map((part) => part.trim()).toList();
+  if (parts.length < 2) return null;
+  const modifierOrder = ['Ctrl', 'Alt', 'Shift', 'Win'];
+  final modifiers = <String>{};
+  for (final rawModifier in parts.take(parts.length - 1)) {
+    final modifier = modifierOrder.firstWhere(
+      (item) => item.toLowerCase() == rawModifier.toLowerCase(),
+      orElse: () => '',
+    );
+    if (modifier.isEmpty || !modifiers.add(modifier)) return null;
+  }
+  final key = parts.last.toUpperCase();
+  final validKey = RegExp(r'^(?:[A-Z0-9]|F(?:[1-9]|1[0-2]))$').hasMatch(key);
+  if (!validKey) return null;
+  return [
+    for (final modifier in modifierOrder)
+      if (modifiers.contains(modifier)) modifier,
+    key,
+  ].join('+');
+}
+
+int? parseDeviceDebugCommand(String input) {
+  final parts = input
+      .trim()
+      .split(RegExp(r'[^0-9a-fA-F]+'))
+      .where((part) => part.isNotEmpty)
+      .toList();
+  if (parts.isEmpty) return null;
+  final bytes = <int>[];
+  for (final part in parts) {
+    final value = int.tryParse(part, radix: 16);
+    if (value == null || value > 0xff) return null;
+    bytes.add(value);
+  }
+  return bytes.length >= 3 && bytes[0] == 0x5a && bytes[1] == 0xa5
+      ? bytes[2]
+      : bytes.first;
+}
+
+bool isLatestVersion(String currentVersion, String latestVersion) {
+  String normalize(String value) => value
+      .trim()
+      .replaceFirst(RegExp(r'^v', caseSensitive: false), '')
+      .toLowerCase();
+  final current = normalize(currentVersion);
+  final latest = normalize(latestVersion);
+  if (current.isEmpty || latest.isEmpty || current == latest) return true;
+  int? nightly(String value) => int.tryParse(
+    RegExp(r'^nightly[-.]?(\d{8})$').firstMatch(value)?.group(1) ?? '',
+  );
+  final currentNightly = nightly(current);
+  final latestNightly = nightly(latest);
+  if (currentNightly != null && latestNightly != null) {
+    return latestNightly <= currentNightly;
+  }
+  List<int>? semver(String value) {
+    final base = value.split('-').first.split('+').first;
+    if (!RegExp(r'^\d+(?:\.\d+){0,3}$').hasMatch(base)) return null;
+    return base.split('.').map(int.parse).toList();
+  }
+
+  final currentParts = semver(current);
+  final latestParts = semver(latest);
+  if (currentParts == null || latestParts == null) return false;
+  final length = math.max(currentParts.length, latestParts.length);
+  for (var index = 0; index < length; index++) {
+    final currentPart = index < currentParts.length ? currentParts[index] : 0;
+    final latestPart = index < latestParts.length ? latestParts[index] : 0;
+    if (latestPart != currentPart) return latestPart < currentPart;
+  }
+  return true;
+}
+
+class ControlPage extends StatefulWidget {
+  const ControlPage({
+    required this.controller,
+    required this.scrollController,
     super.key,
   });
 
-  final IconData icon;
-  final String title;
-  final String message;
+  final AppController controller;
+  final ScrollController scrollController;
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 56),
-            const SizedBox(height: 16),
-            Text(title, style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 8),
-            Text(message, textAlign: TextAlign.center),
-          ],
+  State<ControlPage> createState() => _ControlPageState();
+}
+
+class _ControlPageState extends State<ControlPage> {
+  Map<String, dynamic> lightDraft = normalizeLightStripConfig(null);
+  Object? lightSource;
+  Object? configSource;
+  int customRpm = 2000;
+  final manualHotkeyController = TextEditingController();
+  final autoHotkeyController = TextEditingController();
+  final curveHotkeyController = TextEditingController();
+  final debugCommandController = TextEditingController(text: '27');
+  final cpuSensorFlyoutController = fluent.FlyoutController();
+  Object? debugInfo;
+  Object? debugResult;
+
+  @override
+  void dispose() {
+    manualHotkeyController.dispose();
+    autoHotkeyController.dispose();
+    curveHotkeyController.dispose();
+    debugCommandController.dispose();
+    cpuSensorFlyoutController.dispose();
+    super.dispose();
+  }
+
+  void _syncDrafts(Map<String, dynamic> config) {
+    final nextLightSource = config['lightStrip'];
+    if (!identical(lightSource, nextLightSource)) {
+      lightSource = nextLightSource;
+      lightDraft = normalizeLightStripConfig(nextLightSource);
+    }
+    if (!identical(configSource, config)) {
+      configSource = config;
+      customRpm =
+          (config['customSpeedRPM'] is num
+                  ? (config['customSpeedRPM'] as num).round()
+                  : 2000)
+              .clamp(1000, 4000);
+      manualHotkeyController.text =
+          config['manualGearToggleHotkey']?.toString() ?? '';
+      autoHotkeyController.text =
+          config['autoControlToggleHotkey']?.toString() ?? '';
+      curveHotkeyController.text =
+          config['curveProfileToggleHotkey']?.toString() ?? '';
+    }
+  }
+
+  void _showError([String? fallback]) {
+    if (!mounted) return;
+    fluent.displayInfoBar(
+      context,
+      alignment: Alignment.topCenter,
+      builder: (_, close) => fluent.InfoBar.error(
+        title: const Text('操作失败'),
+        content: Text(widget.controller.error ?? fallback ?? 'Core 未完成该操作'),
+        action: fluent.IconButton(
+          icon: const Icon(fluent.WindowsIcons.chrome_close),
+          onPressed: close,
         ),
       ),
     );
   }
-}
 
-class RenderingLabPage extends StatefulWidget {
-  const RenderingLabPage({required this.scrollController, super.key});
-
-  final ScrollController scrollController;
-
-  @override
-  State<RenderingLabPage> createState() => _RenderingLabPageState();
-}
-
-class _RenderingLabPageState extends State<RenderingLabPage>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController animation;
-
-  @override
-  void initState() {
-    super.initState();
-    animation = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 4),
-    )..repeat();
+  Future<bool> _saveConfig(Map<String, dynamic> patch, String action) async {
+    final saved = await widget.controller.updateConfig(patch, action: action);
+    if (!saved) _showError('$action失败');
+    return saved;
   }
 
-  @override
-  void dispose() {
-    animation.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) => ListView(
-        controller: widget.scrollController,
-        padding: const EdgeInsets.all(20),
-        children: [
-          Text('Flutter 3 渲染实验', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 4),
-          Text(
-            '窗口 ${constraints.maxWidth.toStringAsFixed(0)} × '
-            '${constraints.maxHeight.toStringAsFixed(0)} · 协议 3.0',
+  Future<void> _showCpuSensorPicker(
+    List<Map<String, dynamic>> sensors,
+    Set<String> selected,
+  ) async {
+    final draft = {...selected};
+    await cpuSensorFlyoutController.showFlyout<void>(
+      barrierColor: Colors.transparent,
+      autoModeConfiguration: fluent.FlyoutAutoConfiguration(
+        preferredMode: fluent.FlyoutPlacementMode.bottomRight,
+      ),
+      builder: (context) => fluent.FlyoutContent(
+        constraints: const BoxConstraints(
+          minWidth: 280,
+          maxWidth: 360,
+          maxHeight: 360,
+        ),
+        child: StatefulBuilder(
+          builder: (context, setFlyoutState) => SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                fluent.Checkbox(
+                  key: const ValueKey('control-cpu-sensor-auto'),
+                  checked: draft.isEmpty,
+                  content: const Text('自动选择（推荐）'),
+                  onChanged: (_) => setFlyoutState(draft.clear),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: fluent.Divider(),
+                ),
+                for (final sensor in sensors)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: fluent.Checkbox(
+                      key: ValueKey('control-cpu-sensor-${sensor['key']}'),
+                      checked: draft.contains(sensor['key'].toString()),
+                      content: Text('${sensor['name']} (${sensor['value']}°C)'),
+                      onChanged: (checked) => setFlyoutState(() {
+                        final key = sensor['key'].toString();
+                        checked == true ? draft.add(key) : draft.remove(key);
+                      }),
+                    ),
+                  ),
+              ],
+            ),
           ),
+        ),
+      ),
+    );
+    if (!mounted || setEquals(draft, selected)) return;
+    await _saveConfig({
+      'cpuSensors': [
+        for (final sensor in sensors)
+          if (draft.contains(sensor['key'].toString()))
+            sensor['key'].toString(),
+      ],
+    }, '设置 CPU 传感器');
+  }
+
+  Future<bool> _runControl(
+    String request, {
+    required Object data,
+    required Map<String, dynamic> patch,
+    required String action,
+  }) async {
+    final result = await widget.controller.runControlRequest(
+      request,
+      data: data,
+      configPatch: patch,
+      action: action,
+    );
+    if (result == null) _showError('$action失败');
+    return result != null;
+  }
+
+  Color _lightColor(int index) {
+    final colors = lightDraft['colors'] as List;
+    final color = Map<String, dynamic>.from(colors[index] as Map);
+    return Color.fromARGB(
+      255,
+      color['r'] as int,
+      color['g'] as int,
+      color['b'] as int,
+    );
+  }
+
+  Future<void> _pickLightColor(int index) async {
+    var selected = _lightColor(index);
+    final result = await fluent.showDialog<Color>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => fluent.ContentDialog(
+          title: Text('颜色 ${index + 1}'),
+          content: SizedBox(
+            width: 420,
+            child: fluent.ColorPicker(
+              color: selected,
+              isAlphaEnabled: false,
+              isAlphaSliderVisible: false,
+              isAlphaTextInputVisible: false,
+              onChanged: (color) => setDialogState(() => selected = color),
+            ),
+          ),
+          actions: [
+            fluent.FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, selected),
+              child: const Text('确定'),
+            ),
+            fluent.Button(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    final value = result.toARGB32();
+    final colors = [
+      for (final color in lightDraft['colors'] as List)
+        Map<String, int>.from(color as Map),
+    ];
+    colors[index] = {
+      'r': (value >> 16) & 0xff,
+      'g': (value >> 8) & 0xff,
+      'b': value & 0xff,
+    };
+    setState(() => lightDraft = {...lightDraft, 'colors': colors});
+  }
+
+  Future<void> _applyLightStrip() async {
+    await _runControl(
+      'SetLightStrip',
+      data: {'config': lightDraft},
+      patch: {'lightStrip': lightDraft},
+      action: '应用灯效',
+    );
+  }
+
+  Future<void> _setCustomSpeed(bool enabled) async {
+    if (enabled && widget.controller.config?['customSpeedEnabled'] != true) {
+      final confirmed = await fluent.showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => fluent.ContentDialog(
+          title: const Text('启用固定转速'),
+          content: Text(
+            '固定转速会关闭智能控温，并让散热器持续运行在 $customRpm RPM。'
+            '温度变化时不会自动提速，确定继续吗？',
+          ),
+          actions: [
+            fluent.FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('启用'),
+            ),
+            fluent.Button(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await _runControl(
+      'SetCustomSpeed',
+      data: {'enabled': enabled, 'rpm': customRpm},
+      patch: {
+        'customSpeedEnabled': enabled,
+        'customSpeedRPM': customRpm,
+        if (enabled) 'autoControl': false,
+      },
+      action: enabled ? '启用固定转速' : '关闭固定转速',
+    );
+  }
+
+  Future<void> _saveHotkeys() async {
+    final values = [
+      normalizeHotkey(manualHotkeyController.text),
+      normalizeHotkey(autoHotkeyController.text),
+      normalizeHotkey(curveHotkeyController.text),
+    ];
+    if (values.any((value) => value == null)) {
+      _showError('快捷键需包含至少一个修饰键，并以字母、数字或 F1–F12 结尾');
+      return;
+    }
+    final nonEmpty = values.whereType<String>().where(
+      (value) => value.isNotEmpty,
+    );
+    if (nonEmpty.toSet().length != nonEmpty.length) {
+      _showError('三个快捷键不能重复');
+      return;
+    }
+    final saved = await _saveConfig({
+      'manualGearToggleHotkey': values[0],
+      'autoControlToggleHotkey': values[1],
+      'curveProfileToggleHotkey': values[2],
+    }, '保存快捷键');
+    if (saved && mounted) {
+      manualHotkeyController.text = values[0]!;
+      autoHotkeyController.text = values[1]!;
+      curveHotkeyController.text = values[2]!;
+    }
+  }
+
+  Future<void> _loadDebugInfo() async {
+    final result = await widget.controller.runControlRequest(
+      'GetDebugInfo',
+      action: '读取诊断信息',
+    );
+    if (!mounted) return;
+    if (result == null) {
+      _showError('读取诊断信息失败');
+    } else {
+      setState(() => debugInfo = result);
+    }
+  }
+
+  Future<void> _sendDebugCommand() async {
+    final command = debugCommandController.text.trim();
+    if (parseDeviceDebugCommand(command) == null) {
+      _showError('请输入有效的十六进制命令');
+      return;
+    }
+    final result = await widget.controller.runControlRequest(
+      'SendDeviceDebugCommand',
+      data: {'hex': command, 'waitMs': 900},
+      action: '发送设备调试命令',
+    );
+    if (!mounted) return;
+    if (result == null) {
+      _showError('发送设备调试命令失败');
+    } else {
+      setState(() => debugResult = result);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: widget.controller,
+    builder: (context, _) {
+      final config = widget.controller.config;
+      final connected =
+          widget.controller.connection == CoreConnection.connected;
+      if (config == null) {
+        return fluent.ScaffoldPage.scrollable(
+          scrollController: widget.scrollController,
+          header: const fluent.PageHeader(title: Text('控制')),
+          children: const [
+            fluent.InfoBar.warning(
+              title: Text('正在等待 Core 配置'),
+              content: Text('连接成功后将在这里显示设备与系统控制。'),
+            ),
+          ],
+        );
+      }
+      _syncDrafts(config);
+      final deviceConnected = connected && widget.controller.deviceConnected;
+      final busy =
+          widget.controller.updatingControls ||
+          widget.controller.updatingFanFeatures;
+      final model = widget.controller.deviceStatus?['model']?.toString() ?? '';
+      final isBs1 = model == 'BS1';
+      final legionSupport = _stringMap(config['legionFnQSupport']);
+      return fluent.ScaffoldPage.scrollable(
+        scrollController: widget.scrollController,
+        header: fluent.PageHeader(
+          title: const Text('控制'),
+          commandBar: fluent.CommandBar(
+            mainAxisAlignment: MainAxisAlignment.end,
+            primaryItems: [
+              fluent.CommandBarButton(
+                icon: const Icon(fluent.FluentIcons.refresh),
+                label: const Text('刷新'),
+                onPressed: connected ? widget.controller.refresh : null,
+              ),
+            ],
+          ),
+        ),
+        children: [
+          if (widget.controller.error != null) ...[
+            fluent.InfoBar.error(
+              title: const Text('最近一次操作失败'),
+              content: Text(widget.controller.error!),
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (!connected || !widget.controller.deviceConnected) ...[
+            fluent.InfoBar.warning(
+              title: Text(connected ? '设备未连接' : 'Core 未连接'),
+              content: const Text('设备相关控件暂不可用，系统与界面设置仍可修改。'),
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (!isBs1) ...[
+            _buildLightCard(deviceConnected, busy),
+            const SizedBox(height: 16),
+          ],
+          _buildTemperatureCard(config, connected, busy),
           const SizedBox(height: 16),
-          Semantics(
-            label: '持续更新的八条折线渲染压力图',
-            child: RepaintBoundary(
-              child: SizedBox(
-                height: 280,
-                child: AnimatedBuilder(
-                  animation: animation,
-                  builder: (_, _) =>
-                      CustomPaint(painter: StressChartPainter(animation.value)),
+          _buildCustomSpeedCard(config, deviceConnected, busy),
+          const SizedBox(height: 16),
+          _buildDeviceCard(config, deviceConnected, busy, isBs1),
+          if (legionSupport?['supported'] == true) ...[
+            const SizedBox(height: 16),
+            _buildLegionCard(config, connected, busy),
+          ],
+          const SizedBox(height: 16),
+          _buildSystemCard(config, connected, busy),
+          const SizedBox(height: 16),
+          _buildDebugPanel(config, deviceConnected, busy),
+        ],
+      );
+    },
+  );
+
+  Widget _buildLightCard(bool enabled, bool busy) {
+    final mode = lightDraft['mode'] as String;
+    final speed = lightDraft['speed'] as String;
+    final brightness = lightDraft['brightness'] as int;
+    final colorCount = requiredLightColorCount(mode);
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.color,
+      title: '灯光效果',
+      description: '设置灯带模式、动画速度、亮度和颜色。',
+      trailing: fluent.FilledButton(
+        key: const ValueKey('control-light-apply'),
+        onPressed: enabled && !busy ? _applyLightStrip : null,
+        child: const Text('应用'),
+      ),
+      childPadding: EdgeInsets.fromLTRB(
+        16,
+        0,
+        16,
+        mode == 'smart_temp' || colorCount > 0 ? 16 : 0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 8, 0, 16),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: fluent.InfoLabel(
+                    label: '灯效模式',
+                    child: fluent.ComboBox<String>(
+                      key: const ValueKey('control-light-mode'),
+                      value: mode,
+                      isExpanded: true,
+                      iconSize: _comboBoxIconSize,
+                      items: [
+                        for (final option in _lightModes)
+                          fluent.ComboBoxItem(
+                            value: option.value,
+                            child: Text(option.label),
+                          ),
+                      ],
+                      onChanged: busy
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setState(
+                                  () => lightDraft = {
+                                    ...lightDraft,
+                                    'mode': value,
+                                  },
+                                );
+                              }
+                            },
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 180,
+                  child: fluent.InfoLabel(
+                    label: '动画速度',
+                    child: fluent.ComboBox<String>(
+                      value: speed,
+                      isExpanded: true,
+                      iconSize: _comboBoxIconSize,
+                      items: [
+                        for (final option in _lightSpeeds)
+                          fluent.ComboBoxItem(
+                            value: option.value,
+                            child: Text(option.label),
+                          ),
+                      ],
+                      onChanged:
+                          busy ||
+                              const {
+                                'off',
+                                'smart_temp',
+                                'static_single',
+                                'static_multi',
+                              }.contains(mode)
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setState(
+                                  () => lightDraft = {
+                                    ...lightDraft,
+                                    'speed': value,
+                                  },
+                                );
+                              }
+                            },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '灯带亮度',
+            description: mode == 'smart_temp'
+                ? '智能温度模式由设备自动控制亮度。'
+                : '调整灯带整体亮度。',
+            trailing: SizedBox(
+              width: 300,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: fluent.Slider(
+                      value: brightness.toDouble(),
+                      min: 0,
+                      max: 100,
+                      divisions: 100,
+                      label: '$brightness%',
+                      onChanged: busy || mode == 'off' || mode == 'smart_temp'
+                          ? null
+                          : (value) => setState(
+                              () => lightDraft = {
+                                ...lightDraft,
+                                'brightness': value.round(),
+                              },
+                            ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(width: 44, child: Text('$brightness%')),
+                ],
+              ),
+            ),
+          ),
+          if (mode == 'smart_temp') ...[
+            const SizedBox(height: 8),
+            const fluent.InfoBar.warning(
+              title: Text('智能温度灯效'),
+              content: Text('该模式由设备根据温度自动控制颜色与亮度。'),
+            ),
+          ],
+          if (colorCount > 0) ...[
+            const fluent.Divider(),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (var index = 0; index < colorCount; index++)
+                  fluent.Button(
+                    onPressed: busy ? null : () => _pickLightColor(index),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            color: _lightColor(index),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.black26),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('颜色 ${index + 1}'),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTemperatureCard(
+    Map<String, dynamic> config,
+    bool enabled,
+    bool busy,
+  ) {
+    List<Map<String, dynamic>> maps(Object? raw) => raw is List
+        ? [
+            for (final item in raw)
+              if (item is Map) Map<String, dynamic>.from(item),
+          ]
+        : const [];
+    final temperature = widget.controller.temperature;
+    final cpuSensors = maps(temperature?['cpuSensors']);
+    final gpuDevices = maps(temperature?['gpuDevices']);
+    final fallbackGpuSensors = maps(temperature?['gpuSensors']);
+    final cpuSensorKeys = {
+      for (final sensor in cpuSensors) sensor['key'].toString(),
+    };
+    final selectedCpuSensors = config['cpuSensors'] is List
+        ? (config['cpuSensors'] as List)
+              .map((item) => item.toString())
+              .where(cpuSensorKeys.contains)
+              .toSet()
+        : <String>{};
+    final configuredDevice = config['gpuDevice']?.toString() ?? 'auto';
+    final selectedDevice =
+        configuredDevice == 'auto' ||
+            gpuDevices.any((device) => device['key'] == configuredDevice)
+        ? configuredDevice
+        : 'auto';
+    final detectedDevice = temperature?['selectedGpuDevice']?.toString();
+    final activeDeviceKey = selectedDevice == 'auto'
+        ? detectedDevice
+        : selectedDevice;
+    final activeDevice = gpuDevices.cast<Map<String, dynamic>?>().firstWhere(
+      (device) => device?['key'] == activeDeviceKey,
+      orElse: () => null,
+    );
+    final gpuSensors = activeDevice == null
+        ? fallbackGpuSensors
+        : maps(activeDevice['sensors']);
+    final configuredSensor = config['gpuSensor']?.toString() ?? 'auto';
+    final selectedGpuSensor =
+        gpuSensors.any((sensor) => sensor['key'] == configuredSensor)
+        ? configuredSensor
+        : 'auto';
+    final gpuEnabled = config['disableGpuMonitoring'] != true;
+    final tempSource =
+        const {'max', 'cpu', 'gpu'}.contains(config['tempSource'])
+        ? config['tempSource'] as String
+        : 'max';
+    final sampleCount =
+        const {1, 2, 3, 5, 10}.contains(config['tempSampleCount'])
+        ? config['tempSampleCount'] as int
+        : 1;
+
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.diagnostic,
+      title: '温度监测',
+      description: '选择自动控温使用的 CPU、GPU 与传感器来源。',
+      trailing: const SizedBox.shrink(),
+      childPadding: gpuEnabled ? _settingContentPadding : _settingRowsPadding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _SettingRow(
+            title: '控温温度来源',
+            description: '选择 CPU、GPU 或二者最高温作为风扇曲线基准。',
+            trailing: SizedBox(
+              width: _settingControlWidth,
+              child: fluent.ComboBox<String>(
+                key: const ValueKey('control-temperature-source'),
+                value: tempSource,
+                isExpanded: true,
+                iconSize: _comboBoxIconSize,
+                items: const [
+                  fluent.ComboBoxItem(
+                    value: 'max',
+                    child: Text('CPU / GPU 最高温'),
+                  ),
+                  fluent.ComboBoxItem(value: 'cpu', child: Text('仅 CPU')),
+                  fluent.ComboBoxItem(value: 'gpu', child: Text('仅 GPU')),
+                ],
+                onChanged: enabled && !busy
+                    ? (value) {
+                        if (value != null) {
+                          _saveConfig({'tempSource': value}, '切换控温温度来源');
+                        }
+                      }
+                    : null,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '温度平滑',
+            description: '采样数越高越平稳，但对温度突变的反应会稍慢。',
+            trailing: SizedBox(
+              width: _settingControlWidth,
+              child: fluent.ComboBox<int>(
+                value: sampleCount,
+                isExpanded: true,
+                iconSize: _comboBoxIconSize,
+                items: const [
+                  fluent.ComboBoxItem(value: 1, child: Text('即时')),
+                  fluent.ComboBoxItem(value: 2, child: Text('灵敏')),
+                  fluent.ComboBoxItem(value: 3, child: Text('均衡')),
+                  fluent.ComboBoxItem(value: 5, child: Text('平稳')),
+                  fluent.ComboBoxItem(value: 10, child: Text('最平稳')),
+                ],
+                onChanged: enabled && !busy
+                    ? (value) {
+                        if (value != null) {
+                          _saveConfig({'tempSampleCount': value}, '设置温度平滑');
+                        }
+                      }
+                    : null,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: 'CPU 温度传感器',
+            description: cpuSensors.isEmpty
+                ? '暂未发现可选传感器，将由 Core 自动选择。'
+                : temperature?['cpuModel']?.toString().trim().isNotEmpty == true
+                ? temperature!['cpuModel'].toString()
+                : '选择参与 CPU 温度计算的传感器。',
+            trailing: SizedBox(
+              width: _settingControlWidth,
+              child: fluent.FlyoutTarget(
+                controller: cpuSensorFlyoutController,
+                child: fluent.Button(
+                  key: const ValueKey('control-cpu-sensors'),
+                  onPressed: enabled && !busy && cpuSensors.isNotEmpty
+                      ? () =>
+                            _showCpuSensorPicker(cpuSensors, selectedCpuSensors)
+                      : null,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          selectedCpuSensors.isEmpty
+                              ? '自动选择'
+                              : selectedCpuSensors.length == 1
+                              ? cpuSensors
+                                    .firstWhere(
+                                      (sensor) => selectedCpuSensors.contains(
+                                        sensor['key'].toString(),
+                                      ),
+                                    )['name']
+                                    .toString()
+                              : '已选 ${selectedCpuSensors.length} 项',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const fluent.WindowsIcon(
+                        fluent.WindowsIcons.chevron_down,
+                        size: _comboBoxIconSize,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: 'GPU 温度监测',
+            description: '关闭后不再轮询 GPU，可避免混合显卡设备唤醒独显。',
+            trailing: fluent.ToggleSwitch(
+              key: const ValueKey('control-gpu-monitoring'),
+              checked: gpuEnabled,
+              semanticLabel: 'GPU 温度监测',
+              onChanged: enabled && !busy
+                  ? (value) => _saveConfig({
+                      'disableGpuMonitoring': !value,
+                    }, value ? '启用 GPU 温度监测' : '停用 GPU 温度监测')
+                  : null,
+            ),
+          ),
+          if (gpuEnabled) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                SizedBox(
+                  width: 280,
+                  child: fluent.InfoLabel(
+                    label: 'GPU 设备',
+                    child: fluent.ComboBox<String>(
+                      value: selectedDevice,
+                      isExpanded: true,
+                      iconSize: _comboBoxIconSize,
+                      items: [
+                        const fluent.ComboBoxItem(
+                          value: 'auto',
+                          child: Text('自动选择'),
+                        ),
+                        for (final device in gpuDevices)
+                          fluent.ComboBoxItem(
+                            value: device['key'].toString(),
+                            child: Text(
+                              '${device['vendor']?.toString().toUpperCase() ?? ''}'
+                              '${device['vendor']?.toString().isNotEmpty == true ? ' · ' : ''}'
+                              '${device['name']}',
+                            ),
+                          ),
+                      ],
+                      onChanged: enabled && !busy && gpuDevices.isNotEmpty
+                          ? (value) {
+                              if (value != null) {
+                                _saveConfig({
+                                  'gpuDevice': value,
+                                  'gpuSensor': 'auto',
+                                }, '选择 GPU 设备');
+                              }
+                            }
+                          : null,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 280,
+                  child: fluent.InfoLabel(
+                    label: 'GPU 传感器',
+                    child: fluent.ComboBox<String>(
+                      value: selectedGpuSensor,
+                      isExpanded: true,
+                      iconSize: _comboBoxIconSize,
+                      items: [
+                        const fluent.ComboBoxItem(
+                          value: 'auto',
+                          child: Text('自动选择'),
+                        ),
+                        for (final sensor in gpuSensors)
+                          fluent.ComboBoxItem(
+                            value: sensor['key'].toString(),
+                            child: Text(
+                              '${sensor['name']} (${sensor['value']}°C)',
+                            ),
+                          ),
+                      ],
+                      onChanged: enabled && !busy && gpuSensors.isNotEmpty
+                          ? (value) {
+                              if (value != null) {
+                                _saveConfig({'gpuSensor': value}, '选择 GPU 传感器');
+                              }
+                            }
+                          : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCustomSpeedCard(
+    Map<String, dynamic> config,
+    bool enabled,
+    bool busy,
+  ) {
+    final active = config['customSpeedEnabled'] == true;
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.speed_high,
+      title: '固定转速',
+      description: active
+          ? '当前持续运行在 $customRpm RPM，智能控温已暂停。'
+          : '调试散热效果时可暂时绕过自动曲线。',
+      trailing: fluent.ToggleSwitch(
+        key: const ValueKey('control-custom-speed-enabled'),
+        checked: active,
+        semanticLabel: '固定转速',
+        onChanged: enabled && !busy ? _setCustomSpeed : null,
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 120,
+            child: fluent.NumberBox<int>(
+              key: const ValueKey('control-custom-speed-rpm'),
+              value: customRpm,
+              min: 1000,
+              max: 4000,
+              smallChange: 50,
+              largeChange: 200,
+              mode: fluent.SpinButtonPlacementMode.none,
+              clearButton: false,
+              textAlign: TextAlign.center,
+              onChanged: busy
+                  ? null
+                  : (value) {
+                      if (value != null) {
+                        setState(() => customRpm = value.clamp(1000, 4000));
+                      }
+                    },
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Text('RPM'),
+          const Spacer(),
+          fluent.FilledButton(
+            key: const ValueKey('control-custom-speed-apply'),
+            onPressed: active && enabled && !busy
+                ? () => _setCustomSpeed(true)
+                : null,
+            child: const Text('应用转速'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeviceCard(
+    Map<String, dynamic> config,
+    bool enabled,
+    bool busy,
+    bool isBs1,
+  ) {
+    final smartStartStop =
+        const {'off', 'immediate', 'delayed'}.contains(config['smartStartStop'])
+        ? config['smartStartStop'] as String
+        : 'off';
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.devices3,
+      title: '设备设置',
+      description: '这些选项会立即写入散热器固件。',
+      trailing: const SizedBox.shrink(),
+      childPadding: _settingRowsPadding,
+      child: Column(
+        children: [
+          if (!isBs1) ...[
+            _SettingRow(
+              title: '挡位指示灯',
+              description: '控制设备上的挡位状态灯。',
+              trailing: fluent.ToggleSwitch(
+                key: const ValueKey('control-gear-light'),
+                checked: config['gearLight'] == true,
+                semanticLabel: '挡位指示灯',
+                onChanged: enabled && !busy
+                    ? (value) => _runControl(
+                        'SetGearLight',
+                        data: {'enabled': value},
+                        patch: {'gearLight': value},
+                        action: '设置挡位指示灯',
+                      )
+                    : null,
+              ),
+            ),
+            const fluent.Divider(),
+          ],
+          _SettingRow(
+            title: '通电自启动',
+            description: '接通电源后让散热器自动开始工作。',
+            trailing: fluent.ToggleSwitch(
+              key: const ValueKey('control-power-on-start'),
+              checked: config['powerOnStart'] == true,
+              semanticLabel: '通电自启动',
+              onChanged: enabled && !busy
+                  ? (value) => _runControl(
+                      'SetPowerOnStart',
+                      data: {'enabled': value},
+                      patch: {'powerOnStart': value},
+                      action: '设置通电自启动',
+                    )
+                  : null,
+            ),
+          ),
+          if (!isBs1) ...[
+            const fluent.Divider(),
+            _SettingRow(
+              title: '智能启停',
+              description: '选择设备检测到笔记本后的启动策略。',
+              trailing: SizedBox(
+                width: _settingControlWidth,
+                child: fluent.ComboBox<String>(
+                  key: const ValueKey('control-smart-start-stop'),
+                  value: smartStartStop,
+                  isExpanded: true,
+                  iconSize: _comboBoxIconSize,
+                  items: const [
+                    fluent.ComboBoxItem(value: 'off', child: Text('关闭')),
+                    fluent.ComboBoxItem(
+                      value: 'immediate',
+                      child: Text('立即启动'),
+                    ),
+                    fluent.ComboBoxItem(value: 'delayed', child: Text('延迟启动')),
+                  ],
+                  onChanged: enabled && !busy
+                      ? (value) {
+                          if (value != null) {
+                            _runControl(
+                              'SetSmartStartStop',
+                              data: {'value': value},
+                              patch: {'smartStartStop': value},
+                              action: '设置智能启停',
+                            );
+                          }
+                        }
+                      : null,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLegionCard(
+    Map<String, dynamic> config,
+    bool enabled,
+    bool busy,
+  ) {
+    const defaults = <String, Map<String, String>>{
+      'Quiet': {'gear': '静音', 'level': '中'},
+      'Balance': {'gear': '标准', 'level': '中'},
+      'Performance': {'gear': '强劲', 'level': '中'},
+      'Extreme': {'gear': '超频', 'level': '中'},
+      'GodMode': {'gear': '超频', 'level': '高'},
+    };
+    final raw = _stringMap(config['legionFnQ']) ?? const <String, dynamic>{};
+    final rawMappings = _stringMap(raw['modeMapping']);
+    final mappings = <String, Map<String, dynamic>>{
+      for (final entry in defaults.entries)
+        entry.key: {...entry.value, ...?_stringMap(rawMappings?[entry.key])},
+    };
+    final legionEnabled = raw['enabled'] == true;
+    final takeOver = raw['takeOverFan'] == true;
+
+    Future<void> update(Map<String, dynamic> patch) => _saveConfig({
+      'legionFnQ': {
+        'enabled': legionEnabled,
+        'takeOverFan': takeOver,
+        'modeMapping': mappings,
+        ...patch,
+      },
+    }, '保存 Legion Fn+Q 设置');
+
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.lightning_bolt,
+      title: 'Legion Fn+Q 联动',
+      description: '将联想性能模式映射到散热器手动挡位。',
+      trailing: fluent.ToggleSwitch(
+        key: const ValueKey('control-legion-enabled'),
+        checked: legionEnabled,
+        semanticLabel: 'Legion Fn+Q 联动',
+        onChanged: enabled && !busy
+            ? (value) => update({'enabled': value})
+            : null,
+      ),
+      childPadding: _settingRowsPadding,
+      child: Column(
+        children: [
+          _SettingRow(
+            title: '接管散热器挡位',
+            description: 'Fn+Q 模式变化时自动切换下方映射的挡位。',
+            trailing: fluent.ToggleSwitch(
+              checked: takeOver,
+              semanticLabel: '接管散热器挡位',
+              onChanged: enabled && legionEnabled && !busy
+                  ? (value) => update({'takeOverFan': value})
+                  : null,
+            ),
+          ),
+          for (final entry in defaults.entries) ...[
+            const fluent.Divider(),
+            _SettingRow(
+              title: switch (entry.key) {
+                'Quiet' => '安静模式',
+                'Balance' => '均衡模式',
+                'Performance' => '性能模式',
+                'Extreme' => '极致模式',
+                _ => '自定义模式',
+              },
+              description: entry.key,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 110,
+                    child: fluent.ComboBox<String>(
+                      value:
+                          const {
+                            '静音',
+                            '标准',
+                            '强劲',
+                            '超频',
+                          }.contains(mappings[entry.key]!['gear'])
+                          ? mappings[entry.key]!['gear'] as String
+                          : entry.value['gear'],
+                      isExpanded: true,
+                      iconSize: _comboBoxIconSize,
+                      items: const [
+                        fluent.ComboBoxItem(value: '静音', child: Text('静音')),
+                        fluent.ComboBoxItem(value: '标准', child: Text('标准')),
+                        fluent.ComboBoxItem(value: '强劲', child: Text('强劲')),
+                        fluent.ComboBoxItem(value: '超频', child: Text('超频')),
+                      ],
+                      onChanged: enabled && legionEnabled && takeOver && !busy
+                          ? (value) {
+                              if (value != null) {
+                                update({
+                                  'modeMapping': {
+                                    ...mappings,
+                                    entry.key: {
+                                      ...mappings[entry.key]!,
+                                      'gear': value,
+                                    },
+                                  },
+                                });
+                              }
+                            }
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 90,
+                    child: fluent.ComboBox<String>(
+                      value:
+                          const {
+                            '低',
+                            '中',
+                            '高',
+                          }.contains(mappings[entry.key]!['level'])
+                          ? mappings[entry.key]!['level'] as String
+                          : entry.value['level'],
+                      isExpanded: true,
+                      iconSize: _comboBoxIconSize,
+                      items: const [
+                        fluent.ComboBoxItem(value: '低', child: Text('低')),
+                        fluent.ComboBoxItem(value: '中', child: Text('中')),
+                        fluent.ComboBoxItem(value: '高', child: Text('高')),
+                      ],
+                      onChanged: enabled && legionEnabled && takeOver && !busy
+                          ? (value) {
+                              if (value != null) {
+                                update({
+                                  'modeMapping': {
+                                    ...mappings,
+                                    entry.key: {
+                                      ...mappings[entry.key]!,
+                                      'level': value,
+                                    },
+                                  },
+                                });
+                              }
+                            }
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSystemCard(
+    Map<String, dynamic> config,
+    bool connected,
+    bool busy,
+  ) {
+    final themeMode =
+        const {'system', 'light', 'dark'}.contains(config['themeMode'])
+        ? config['themeMode'] as String
+        : 'system';
+    return _CurveFeatureCard(
+      icon: fluent.FluentIcons.settings,
+      title: '系统设置',
+      description: '设置界面主题、开机自启动、重连策略和全局快捷键。',
+      trailing: const SizedBox.shrink(),
+      childPadding: _settingContentPadding,
+      child: Column(
+        children: [
+          _SettingRow(
+            title: '界面主题',
+            description: 'Flutter 版本使用系统、浅色或深色 Fluent 主题。',
+            trailing: SizedBox(
+              width: _settingControlWidth,
+              child: fluent.ComboBox<String>(
+                key: const ValueKey('control-theme-mode'),
+                value: themeMode,
+                isExpanded: true,
+                iconSize: _comboBoxIconSize,
+                items: const [
+                  fluent.ComboBoxItem(value: 'system', child: Text('跟随系统')),
+                  fluent.ComboBoxItem(value: 'light', child: Text('浅色')),
+                  fluent.ComboBoxItem(value: 'dark', child: Text('深色')),
+                ],
+                onChanged: connected && !busy
+                    ? (value) {
+                        if (value != null) {
+                          _saveConfig({'themeMode': value}, '切换界面主题');
+                        }
+                      }
+                    : null,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: Platform.isWindows ? 'Windows 开机自启动' : 'Linux 登录时启动',
+            description: Platform.isWindows
+                ? '按当前权限使用计划任务或注册表启动 THRM。'
+                : '通过 XDG autostart 在登录桌面后启动 THRM。',
+            trailing: fluent.ToggleSwitch(
+              key: const ValueKey('control-auto-start'),
+              checked: config['windowsAutoStart'] == true,
+              semanticLabel: '开机自启动',
+              onChanged: connected && !busy
+                  ? (value) async {
+                      final saved = await widget.controller.setAutoStart(value);
+                      if (!saved) _showError('设置开机自启动失败');
+                    }
+                  : null,
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '断连后保持应用配置',
+            description: '设备重新连接时不让固件状态覆盖 THRM 中的设置。',
+            trailing: fluent.ToggleSwitch(
+              key: const ValueKey('control-reconnect-policy'),
+              checked: config['ignoreDeviceOnReconnect'] != false,
+              semanticLabel: '断连后保持应用配置',
+              onChanged: connected && !busy
+                  ? (value) => _saveConfig({
+                      'ignoreDeviceOnReconnect': value,
+                    }, '保存重连策略')
+                  : null,
+            ),
+          ),
+          const fluent.Divider(),
+          const SizedBox(height: 12),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              '全局快捷键',
+              style: fluent.FluentTheme.of(context).typography.bodyStrong,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              '点击输入框后直接按组合键；右侧按钮或 Backspace / Delete 可清空。',
+              style: fluent.FluentTheme.of(context).typography.caption,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _SettingRow(
+            title: '切换手动挡位',
+            description: '在静音、标准、强劲和超频挡位之间循环。',
+            trailing: SizedBox(
+              width: 250,
+              child: _HotkeyRecorder(
+                key: const ValueKey('control-hotkey-manual'),
+                controller: manualHotkeyController,
+                enabled: connected && !busy,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '开关智能控温',
+            description: '快速启用或暂停自动风扇曲线。',
+            trailing: SizedBox(
+              width: 250,
+              child: _HotkeyRecorder(
+                key: const ValueKey('control-hotkey-auto'),
+                controller: autoHotkeyController,
+                enabled: connected && !busy,
+              ),
+            ),
+          ),
+          const fluent.Divider(),
+          _SettingRow(
+            title: '切换曲线方案',
+            description: '按顺序切换已保存的风扇曲线方案。',
+            trailing: SizedBox(
+              width: 250,
+              child: _HotkeyRecorder(
+                key: const ValueKey('control-hotkey-curve'),
+                controller: curveHotkeyController,
+                enabled: connected && !busy,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: fluent.Button(
+              key: const ValueKey('control-hotkeys-save'),
+              onPressed: connected && !busy ? _saveHotkeys : null,
+              child: const Text('保存快捷键'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDebugPanel(
+    Map<String, dynamic> config,
+    bool deviceConnected,
+    bool busy,
+  ) {
+    final commandByte = parseDeviceDebugCommand(debugCommandController.text);
+    final dangerous =
+        commandByte != null &&
+        const {0xed, 0xee, 0xf0, 0xf1, 0xf2}.contains(commandByte);
+    final debugMode = config['debugMode'] == true;
+    const encoder = JsonEncoder.withIndent('  ');
+    return fluent.Expander(
+      key: const ValueKey('control-debug-panel'),
+      leading: const Icon(fluent.FluentIcons.bug),
+      header: const Text('诊断与调试'),
+      trailing: fluent.ToggleSwitch(
+        key: const ValueKey('control-debug-mode'),
+        checked: debugMode,
+        semanticLabel: '调试模式',
+        onChanged: !busy
+            ? (value) => _runControl(
+                'SetDebugMode',
+                data: {'enabled': value},
+                patch: {'debugMode': value},
+                action: '切换调试模式',
+              )
+            : null,
+      ),
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              fluent.Button(
+                key: const ValueKey('control-debug-refresh'),
+                onPressed: busy ? null : _loadDebugInfo,
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(fluent.FluentIcons.refresh, size: 16),
+                    SizedBox(width: 8),
+                    Text('读取诊断信息'),
+                  ],
+                ),
+              ),
+              fluent.Button(
+                onPressed: debugInfo == null
+                    ? null
+                    : () => Clipboard.setData(
+                        ClipboardData(text: encoder.convert(debugInfo)),
+                      ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(fluent.FluentIcons.copy, size: 16),
+                    SizedBox(width: 8),
+                    Text('复制诊断信息'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (debugInfo != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 300),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: fluent.FluentTheme.of(
+                  context,
+                ).resources.controlFillColorDefault,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  encoder.convert(debugInfo),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          fluent.InfoBar(
+            title: Text(dangerous ? '高危设备命令' : '原始设备命令'),
+            content: Text(
+              dangerous
+                  ? '0x${commandByte.toRadixString(16).toUpperCase().padLeft(2, '0')} '
+                        '会直接操作固件底层寄存器，误用可能导致设备异常甚至变砖。'
+                  : '命令会直接下发到设备固件，请仅在明确了解协议时使用。',
+            ),
+            severity: dangerous
+                ? fluent.InfoBarSeverity.error
+                : fluent.InfoBarSeverity.warning,
           ),
           const SizedBox(height: 12),
-          for (var index = 0; index < 24; index++)
-            Card(
-              child: ListTile(
-                leading: CircleAvatar(child: Text('${index + 1}')),
-                title: Text('滚动与合成测试项 ${index + 1}'),
-                subtitle: LinearProgressIndicator(
-                  value: ((index * 37) % 100) / 100,
+          Row(
+            children: [
+              Expanded(
+                child: fluent.TextBox(
+                  key: const ValueKey('control-debug-command'),
+                  controller: debugCommandController,
+                  placeholder: '27 或 5A A5 27 02 29',
+                  enabled: debugMode && deviceConnected && !busy,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) => _sendDebugCommand(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              fluent.FilledButton(
+                key: const ValueKey('control-debug-send'),
+                onPressed:
+                    debugMode && deviceConnected && !busy && commandByte != null
+                    ? _sendDebugCommand
+                    : null,
+                child: const Text('发送'),
+              ),
+            ],
+          ),
+          if (debugResult != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 220),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: fluent.FluentTheme.of(
+                  context,
+                ).resources.controlFillColorDefault,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  encoder.convert(debugResult),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                 ),
               ),
             ),
+          ],
         ],
       ),
     );
   }
 }
 
-class StressChartPainter extends CustomPainter {
-  const StressChartPainter(this.phase);
+class _HotkeyRecorder extends StatefulWidget {
+  const _HotkeyRecorder({
+    required this.controller,
+    required this.enabled,
+    super.key,
+  });
 
-  final double phase;
+  final TextEditingController controller;
+  final bool enabled;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    canvas.drawRect(
-      Offset.zero & size,
-      Paint()..color = const Color(0xff111318),
-    );
-    final grid = Paint()
-      ..color = Colors.white12
-      ..strokeWidth = 1;
-    for (var index = 1; index < 8; index++) {
-      final y = size.height * index / 8;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+  State<_HotkeyRecorder> createState() => _HotkeyRecorderState();
+}
+
+class _HotkeyRecorderState extends State<_HotkeyRecorder> {
+  late final FocusNode focusNode;
+  bool recording = false;
+
+  @override
+  void initState() {
+    super.initState();
+    focusNode = FocusNode(onKeyEvent: _handleKeyEvent)
+      ..addListener(_handleFocusChanged);
+  }
+
+  @override
+  void didUpdateWidget(_HotkeyRecorder oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.enabled && recording) focusNode.unfocus();
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (!recording) return KeyEventResult.ignored;
+    if (event is! KeyDownEvent) return KeyEventResult.handled;
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      node.unfocus();
+      return KeyEventResult.handled;
     }
-    for (var series = 0; series < 8; series++) {
-      final path = Path();
-      for (var sample = 0; sample < 320; sample++) {
-        final x = size.width * sample / 319;
-        final wave = math.sin(sample * 0.055 + phase * math.pi * 2 + series);
-        final ripple = math.cos(sample * 0.017 - phase * math.pi * 4 + series);
-        final y = size.height * (0.5 + wave * 0.28 + ripple * 0.08);
-        if (sample == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = HSVColor.fromAHSV(0.85, series * 45, 0.7, 1).toColor()
-          ..strokeWidth = 1.5
-          ..style = PaintingStyle.stroke,
-      );
+    if (event.logicalKey == LogicalKeyboardKey.backspace ||
+        event.logicalKey == LogicalKeyboardKey.delete) {
+      widget.controller.clear();
+      node.unfocus();
+      return KeyEventResult.handled;
+    }
+
+    final keyboard = HardwareKeyboard.instance;
+    final value = normalizeHotkey(
+      [
+        if (keyboard.isControlPressed) 'Ctrl',
+        if (keyboard.isAltPressed) 'Alt',
+        if (keyboard.isShiftPressed) 'Shift',
+        if (keyboard.isMetaPressed) 'Win',
+        event.logicalKey.keyLabel,
+      ].join('+'),
+    );
+    if (value == null || value.isEmpty) return KeyEventResult.handled;
+    widget.controller.text = value;
+    node.unfocus();
+    return KeyEventResult.handled;
+  }
+
+  void _handleFocusChanged() {
+    if (!focusNode.hasFocus && recording && mounted) {
+      setState(() => recording = false);
     }
   }
 
   @override
-  bool shouldRepaint(StressChartPainter oldDelegate) =>
-      phase != oldDelegate.phase;
+  void dispose() {
+    focusNode
+      ..removeListener(_handleFocusChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => fluent.TextBox(
+    controller: widget.controller,
+    focusNode: focusNode,
+    enabled: widget.enabled,
+    readOnly: true,
+    placeholder: recording ? '请按组合键' : '未设置',
+    suffixMode: fluent.OverlayVisibilityMode.editing,
+    suffix: fluent.Tooltip(
+      message: '清空快捷键',
+      child: Padding(
+        padding: const EdgeInsetsDirectional.only(end: 4),
+        child: SizedBox.square(
+          dimension: 24,
+          child: fluent.IconButton(
+            key: const ValueKey('hotkey-clear'),
+            style: const fluent.ButtonStyle(
+              padding: WidgetStatePropertyAll(EdgeInsets.all(4)),
+            ),
+            icon: const Icon(fluent.WindowsIcons.chrome_close, size: 12),
+            onPressed: widget.enabled
+                ? () {
+                    widget.controller.clear();
+                    focusNode.unfocus();
+                  }
+                : null,
+          ),
+        ),
+      ),
+    ),
+    onTap: () {
+      if (widget.enabled && !recording) setState(() => recording = true);
+    },
+    onTapOutside: (_) => focusNode.unfocus(),
+  );
+}
+
+const _appVersion = String.fromEnvironment(
+  'THRM_VERSION',
+  defaultValue: '0.1.0',
+);
+const _repositoryUrl = 'https://github.com/TIANLI0/THRM';
+const _latestReleaseUrl = 'https://github.com/TIANLI0/THRM/releases/latest';
+const _latestReleaseApiUrl =
+    'https://api.github.com/repos/TIANLI0/THRM/releases/latest';
+
+typedef ReleaseInfo = ({String tag, String url, String body});
+
+Future<ReleaseInfo> _fetchLatestRelease() async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final request = await client.getUrl(Uri.parse(_latestReleaseApiUrl));
+    request.headers
+      ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
+      ..set(HttpHeaders.userAgentHeader, 'THRM-Flutter/$_appVersion');
+    final response = await request.close().timeout(const Duration(seconds: 10));
+    final body = await response.transform(utf8.decoder).join();
+    if (response.statusCode != HttpStatus.ok) {
+      throw HttpException('GitHub API 返回 HTTP ${response.statusCode}');
+    }
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) throw const FormatException('GitHub 返回格式无效');
+    final tag = decoded['tag_name']?.toString().trim() ?? '';
+    if (tag.isEmpty) throw const FormatException('GitHub 发布版本缺少标签');
+    final rawUrl = decoded['html_url']?.toString() ?? '';
+    final uri = Uri.tryParse(rawUrl);
+    final url =
+        uri?.scheme == 'https' &&
+            uri?.host == 'github.com' &&
+            uri!.path.startsWith('/TIANLI0/THRM/releases/')
+        ? rawUrl
+        : _latestReleaseUrl;
+    return (tag: tag, url: url, body: decoded['body']?.toString().trim() ?? '');
+  } finally {
+    client.close(force: true);
+  }
+}
+
+Future<bool> _openExternal(String value) async {
+  final uri = Uri.tryParse(value);
+  if (uri == null || (uri.scheme != 'https' && uri.scheme != 'mailto')) {
+    return false;
+  }
+  try {
+    if (Platform.isWindows) {
+      await Process.start('rundll32.exe', [
+        'url.dll,FileProtocolHandler',
+        value,
+      ], mode: ProcessStartMode.detached);
+    } else if (Platform.isLinux) {
+      await Process.start('xdg-open', [value], mode: ProcessStartMode.detached);
+    } else {
+      return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+class AboutPage extends StatefulWidget {
+  const AboutPage({
+    required this.scrollController,
+    this.fetchLatestRelease = _fetchLatestRelease,
+    super.key,
+  });
+
+  final ScrollController scrollController;
+  final Future<ReleaseInfo> Function() fetchLatestRelease;
+
+  @override
+  State<AboutPage> createState() => _AboutPageState();
+}
+
+class _AboutPageState extends State<AboutPage> {
+  ReleaseInfo? release;
+  bool checking = false;
+  String? releaseError;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkRelease();
+  }
+
+  Future<void> _checkRelease() async {
+    setState(() {
+      checking = true;
+      releaseError = null;
+    });
+    try {
+      final next = await widget.fetchLatestRelease();
+      if (mounted) setState(() => release = next);
+    } catch (error) {
+      if (mounted) setState(() => releaseError = error.toString());
+    } finally {
+      if (mounted) setState(() => checking = false);
+    }
+  }
+
+  Future<void> _open(String url) async {
+    if (await _openExternal(url) || !mounted) return;
+    fluent.displayInfoBar(
+      context,
+      alignment: Alignment.topCenter,
+      builder: (_, close) => fluent.InfoBar.error(
+        title: const Text('无法打开链接'),
+        content: Text(url),
+        action: fluent.IconButton(
+          icon: const Icon(fluent.WindowsIcons.chrome_close),
+          onPressed: close,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasUpdate =
+        release != null && !isLatestVersion(_appVersion, release!.tag);
+    final theme = fluent.FluentTheme.of(context);
+    return fluent.ScaffoldPage.scrollable(
+      scrollController: widget.scrollController,
+      header: const fluent.PageHeader(title: Text('关于')),
+      children: [
+        fluent.Card(
+          padding: const EdgeInsets.all(24),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: theme.resources.controlFillColorDefault,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: theme.resources.dividerStrokeColorDefault,
+                  ),
+                ),
+                child: Image.asset('assets/brand/appicon.png'),
+              ),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('THRM', style: theme.typography.title),
+                    const SizedBox(height: 8),
+                    Text(
+                      '面向飞智笔记本压风散热器系列设备的第三方驱动与控制工具。'
+                      'Flutter 前端只负责交互，设备通信与温控仍由独立 Go Core 执行。',
+                      style: theme.typography.body,
+                    ),
+                    const SizedBox(height: 16),
+                    const Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _ValueBadge(text: 'MIT License'),
+                        _ValueBadge(text: 'Windows / Linux'),
+                        _ValueBadge(text: 'BS1 — BS3 Pro'),
+                        _ValueBadge(text: 'FluentUI'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _CurveFeatureCard(
+          icon: fluent.FluentIcons.refresh,
+          title: '版本与更新',
+          description: '从 GitHub Releases 检查稳定版本；安装仍由发布页完成。',
+          trailing: fluent.FilledButton(
+            key: const ValueKey('about-check-update'),
+            onPressed: checking ? null : _checkRelease,
+            child: Text(checking ? '检查中…' : '检查更新'),
+          ),
+          childPadding: _settingContentPadding,
+          child: Column(
+            children: [
+              _SettingRow(
+                title: '当前版本',
+                description: 'Flutter UI · IPC 协议 3.0',
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('v$_appVersion'),
+                    const SizedBox(width: 4),
+                    fluent.IconButton(
+                      icon: const Icon(fluent.FluentIcons.copy, size: 16),
+                      onPressed: () => Clipboard.setData(
+                        const ClipboardData(text: 'v$_appVersion'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const fluent.Divider(),
+              _SettingRow(
+                title: '最新稳定版',
+                description: releaseError != null
+                    ? '检查失败：$releaseError'
+                    : hasUpdate
+                    ? '发现新版本，可前往发布页查看更新说明。'
+                    : release == null
+                    ? '尚未检查'
+                    : '当前已是最新版本。',
+                trailing: Text(release?.tag ?? '--'),
+              ),
+              if (release?.body.isNotEmpty == true) ...[
+                const fluent.Divider(),
+                Container(
+                  width: double.infinity,
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: theme.resources.controlFillColorDefault,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: SingleChildScrollView(
+                    child: SelectableText(release!.body),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: fluent.Button(
+                  onPressed: () => _open(release?.url ?? _latestReleaseUrl),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(fluent.FluentIcons.open_in_new_window, size: 16),
+                      SizedBox(width: 8),
+                      Text('打开发布页'),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _CurveFeatureCard(
+          icon: fluent.FluentIcons.contact,
+          title: '项目与反馈',
+          description: '查看源代码、提交问题或联系项目作者。',
+          trailing: const SizedBox.shrink(),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              fluent.Button(
+                onPressed: () => _open(_repositoryUrl),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(fluent.FluentIcons.repo, size: 16),
+                    SizedBox(width: 8),
+                    Text('GitHub 仓库'),
+                  ],
+                ),
+              ),
+              fluent.Button(
+                onPressed: () => _open('$_repositoryUrl/issues'),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(fluent.FluentIcons.feedback, size: 16),
+                    SizedBox(width: 8),
+                    Text('GitHub Issues'),
+                  ],
+                ),
+              ),
+              fluent.Button(
+                onPressed: () => _open('mailto:wutianli@tianli0.top'),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(fluent.FluentIcons.mail, size: 16),
+                    SizedBox(width: 8),
+                    Text('联系作者'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        const _AboutFaq(),
+        const SizedBox(height: 16),
+        _CurveFeatureCard(
+          icon: fluent.FluentIcons.code,
+          title: '技术与致谢',
+          description: '感谢所有开源项目、贡献者与测试用户。',
+          trailing: const SizedBox.shrink(),
+          child: const Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _ValueBadge(text: 'Flutter'),
+              _ValueBadge(text: 'fluent_ui'),
+              _ValueBadge(text: 'dart_ipc'),
+              _ValueBadge(text: 'Go'),
+              _ValueBadge(text: 'hidapi'),
+              _ValueBadge(text: 'LibreHardwareMonitor'),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AboutFaq extends StatelessWidget {
+  const _AboutFaq();
+
+  static const items = <({String question, String answer})>[
+    (
+      question: '关闭窗口后温控还会继续吗？',
+      answer: '会。设备通信与温控由独立 THRM Core 负责，Flutter 窗口关闭或重启不会中断 Core。',
+    ),
+    (
+      question: '支持哪些系统和设备？',
+      answer:
+          'Flutter 前端仅支持 Windows 与 Linux；设备范围为飞智 BS1、BS2、BS2 Pro、BS3 与 BS3 Pro。',
+    ),
+    (
+      question: '为什么某些传感器或灯效不可用？',
+      answer: '硬件能力取决于设备型号、固件和系统监控接口。THRM 会隐藏或禁用当前设备不支持的控件。',
+    ),
+    (question: '在哪里反馈问题？', answer: '请在 GitHub Issues 附上系统版本、设备型号、复现步骤和诊断信息。'),
+  ];
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      for (var index = 0; index < items.length; index++) ...[
+        fluent.Expander(
+          initiallyExpanded: index == 0,
+          leading: const Icon(fluent.FluentIcons.info),
+          header: Text(items[index].question),
+          content: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(items[index].answer),
+          ),
+        ),
+        if (index != items.length - 1) const SizedBox(height: 8),
+      ],
+    ],
+  );
 }

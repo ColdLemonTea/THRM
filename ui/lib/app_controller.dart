@@ -65,6 +65,7 @@ class AppController extends ChangeNotifier {
   bool updatingFanFeatures = false;
   bool updatingManualGear = false;
   bool updatingTemperatureHistory = false;
+  bool updatingControls = false;
 
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   bool _started = false;
@@ -354,6 +355,57 @@ class AppController extends ChangeNotifier {
       return false;
     } finally {
       updatingManualGear = false;
+      _notify();
+    }
+  }
+
+  Future<Object?> runControlRequest(
+    String request, {
+    Object? data,
+    Map<String, dynamic>? configPatch,
+    String action = '执行操作',
+  }) async {
+    if (!client.isConnected || updatingControls) return null;
+    updatingControls = true;
+    error = null;
+    _notify();
+    try {
+      final result = await client.request(request, data: data);
+      if (result == false) throw StateError('Core 未执行该操作');
+      if (configPatch != null) config = patchConfig(config, configPatch);
+      return result;
+    } catch (caught) {
+      error = '$action失败：$caught';
+      return null;
+    } finally {
+      updatingControls = false;
+      _notify();
+    }
+  }
+
+  Future<bool> setAutoStart(bool enabled) async {
+    if (!client.isConnected || updatingControls) return false;
+    updatingControls = true;
+    error = null;
+    _notify();
+    try {
+      var method = 'desktop';
+      if (Platform.isWindows) {
+        final admin = await client.request('IsRunningAsAdmin');
+        method = admin == true ? 'task_scheduler' : 'registry';
+      }
+      final result = await client.request(
+        'SetAutoStartWithMethod',
+        data: {'enable': enabled, 'method': enabled ? method : ''},
+      );
+      if (result == false) throw StateError('Core 未修改开机自启动');
+      config = patchConfig(config, {'windowsAutoStart': enabled});
+      return true;
+    } catch (caught) {
+      error = '设置开机自启动失败：$caught';
+      return false;
+    } finally {
+      updatingControls = false;
       _notify();
     }
   }
