@@ -1,15 +1,81 @@
 using Avalonia;
+using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Transformation;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using FluentIcons.Avalonia.Fluent;
 using FluentAvalonia.UI.Controls;
+using FluentAvalonia.UI.Media.Animation;
+using FluentAvalonia.UI.Navigation;
 
 namespace THRM.Avalonia;
+
+internal static class FanRatedRpm
+{
+    public const int FallbackRpm = 4000;
+
+    public static int Resolve(FanDataSnapshot? fanData, string? model)
+    {
+        if (IsFixed3300Model(model))
+        {
+            return 3300;
+        }
+
+        if (fanData?.GearSettings is { } gearSettings
+            && FromGearSettings(gearSettings) is { } ratedRpm)
+        {
+            return ratedRpm;
+        }
+
+        return FromMaxGearText(fanData?.MaxGear) ?? FallbackRpm;
+    }
+
+    public static int? FromGearSettings(int gearSettings) =>
+        FromGearCode((gearSettings >> 4) & 0x0F);
+
+    public static int? FromGearCode(int gearCode) => gearCode switch
+    {
+        0x2 or 0x3 or 0xA => 2760,
+        0x4 or 0xC => 3300,
+        0x6 or 0xE => 4000,
+        _ => null,
+    };
+
+    public static int? FromMaxGearText(string? maxGear) => maxGear switch
+    {
+        "静音" => 1900,
+        "标准" => 2700,
+        "强劲" => 3300,
+        "超频" => 4000,
+        _ => null,
+    };
+
+    public static void SelfCheck()
+    {
+        if (FromGearCode(0x6) != 4000 || FromGearCode(0x4) != 3300 || FromGearCode(0x2) != 2760
+            || Resolve(new FanDataSnapshot { GearSettings = 0x60 }, "other") != 4000
+            || Resolve(new FanDataSnapshot { GearSettings = 0x40 }, "other") != 3300
+            || Resolve(new FanDataSnapshot { GearSettings = 0x20 }, "other") != 2760
+            || Resolve(new FanDataSnapshot { GearSettings = 0x10, MaxGear = "强劲" }, "other") != 3300
+            || Resolve(new FanDataSnapshot { MaxGear = "超频" }, "other") != 4000
+            || Resolve(null, "BS2") != 3300 || Resolve(null, "other") != FallbackRpm)
+        {
+            throw new InvalidOperationException("Fan rated RPM mapping check failed.");
+        }
+    }
+
+    private static bool IsFixed3300Model(string? model) =>
+        string.Equals(model, "BS1", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(model, "BS2", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(model, "BS3", StringComparison.OrdinalIgnoreCase);
+}
 
 public partial class MainWindow : Window
 {
@@ -31,7 +97,7 @@ public partial class MainWindow : Window
     private string? _deviceModel;
     private string? _manualGear;
     private string? _manualLevel;
-    private Control? _currentPage;
+    private Type? _currentPageType;
     private readonly List<FanCurvePoint> _fanCurve = [];
     private readonly List<FanCurveProfileSnapshot> _fanCurveProfiles = [];
     private string? _activeFanCurveProfileId;
@@ -46,6 +112,7 @@ public partial class MainWindow : Window
     private bool _temperatureHistoryEnabled;
     private int _temperatureHistoryRetentionHours = 1;
     private bool _updatingTemperatureHistoryControls;
+    private int _deviceFanMaximumRpm = FanRatedRpm.FallbackRpm;
 
     private static readonly string[] ManualGearValues = ["静音", "标准", "强劲", "超频"];
     private static readonly string[] ManualLevelValues = ["低", "中", "高"];
@@ -55,9 +122,13 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        PageCache.Children.Clear();
-        PageHost.Content = StatusPage;
-        _currentPage = StatusPage;
+        using (var iconStream = AssetLoader.Open(new Uri("avares://THRM.Avalonia/Assets/thrm.png")))
+        {
+            Icon = new WindowIcon(new Bitmap(iconStream));
+        }
+        PageDefinitions.Children.Clear();
+        PageFrame.NavigationPageFactory = new MainWindowPageFactory(this);
+        NavigateToPage(typeof(StatusRoute));
         NavigationView.SelectedItem = StatusNavigationItem;
         _ipc.ConnectionChanged += IpcConnectionChanged;
         _ipc.EventReceived += CoreEventReceived;
@@ -75,34 +146,71 @@ public partial class MainWindow : Window
             return;
         }
 
-        var nextPage = page switch
+        var nextPageType = page switch
         {
-            "status" => StatusPage,
-            "fan-curve" => FanCurvePage,
-            "temperature-history" => TemperatureHistoryPage,
-            "fan-control" => FanControlPage,
-            "device-settings" => DeviceSettingsPage,
-            "core" => CorePage,
-            "about" => AboutPage,
+            "status" => typeof(StatusRoute),
+            "fan-curve" => typeof(FanCurveRoute),
+            "temperature-history" => typeof(TemperatureHistoryRoute),
+            "fan-control" => typeof(FanControlRoute),
+            "device-settings" => typeof(DeviceSettingsRoute),
+            "about" => typeof(AboutRoute),
             _ => null,
         };
 
-        if (nextPage is null || ReferenceEquals(nextPage, _currentPage))
+        if (nextPageType is null || nextPageType == _currentPageType)
         {
             return;
         }
 
-        PageHost.Content = nextPage;
-        _currentPage = nextPage;
-        if (ReferenceEquals(nextPage, FanCurvePage))
+        NavigateToPage(nextPageType);
+        if (nextPageType == typeof(FanCurveRoute))
         {
             _ = RefreshFanCurveAsync();
         }
 
-        if (ReferenceEquals(nextPage, TemperatureHistoryPage))
+        if (nextPageType == typeof(TemperatureHistoryRoute))
         {
             _ = RefreshTemperatureHistoryAsync();
         }
+    }
+
+    private void NavigateToPage(Type pageType)
+    {
+        PageFrame.NavigateToType(
+            pageType,
+            null,
+            new FAFrameNavigationOptions
+            {
+                IsNavigationStackEnabled = false,
+                TransitionInfoOverride = new FAEntranceNavigationTransitionInfo
+                {
+                    FromVerticalOffset = 24,
+                },
+            });
+        _currentPageType = pageType;
+    }
+
+    private sealed class StatusRoute { }
+    private sealed class FanCurveRoute { }
+    private sealed class TemperatureHistoryRoute { }
+    private sealed class FanControlRoute { }
+    private sealed class DeviceSettingsRoute { }
+    private sealed class AboutRoute { }
+
+    private sealed class MainWindowPageFactory(MainWindow owner) : IFANavigationPageFactory
+    {
+        public Control? GetPage(Type sourcePageType) => sourcePageType switch
+        {
+            var type when type == typeof(StatusRoute) => owner.StatusPage,
+            var type when type == typeof(FanCurveRoute) => owner.FanCurvePage,
+            var type when type == typeof(TemperatureHistoryRoute) => owner.TemperatureHistoryPage,
+            var type when type == typeof(FanControlRoute) => owner.FanControlPage,
+            var type when type == typeof(DeviceSettingsRoute) => owner.DeviceSettingsPage,
+            var type when type == typeof(AboutRoute) => owner.AboutPage,
+            _ => null,
+        };
+
+        public Control? GetPageFromObject(object target) => null;
     }
 
     private async void WindowOpened(object? sender, EventArgs e)
@@ -143,12 +251,12 @@ public partial class MainWindow : Window
             if (e.Connected)
             {
                 _ = RefreshStateAsync();
-                if (ReferenceEquals(_currentPage, FanCurvePage))
+                if (_currentPageType == typeof(FanCurveRoute))
                 {
                     _ = RefreshFanCurveAsync();
                 }
 
-                if (ReferenceEquals(_currentPage, TemperatureHistoryPage))
+                if (_currentPageType == typeof(TemperatureHistoryRoute))
                 {
                     _ = RefreshTemperatureHistoryAsync();
                 }
@@ -197,8 +305,6 @@ public partial class MainWindow : Window
                 break;
         }
     }
-
-    private async void RefreshClick(object? sender, RoutedEventArgs e) => await RefreshStateAsync();
 
     private async void ConnectDeviceClick(object? sender, RoutedEventArgs e) =>
         await RunWriteAsync("Connect device", () => _ipc.ConnectDeviceAsync(_lifetime.Token));
@@ -336,10 +442,6 @@ public partial class MainWindow : Window
 
     private void ManualSelectionChanged(object? sender, SelectionChangedEventArgs e) => SetActionAvailability();
 
-    private async void ReloadFanCurveClick(object? sender, RoutedEventArgs e) => await RefreshFanCurveAsync();
-
-    private async void ReloadTemperatureHistoryClick(object? sender, RoutedEventArgs e) => await RefreshTemperatureHistoryAsync();
-
     private async void TemperatureHistoryEnabledClick(object? sender, RoutedEventArgs e)
     {
         if (_temperatureHistoryLoading || _writeInProgress || !_ipc.IsConnected || !_temperatureHistoryKnown)
@@ -414,17 +516,96 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void RenameFanCurveProfileClick(object? sender, RoutedEventArgs e)
+    private static void FanCurveProfileManageFlyoutOpening(object? sender, EventArgs e)
     {
-        var profile = ActiveFanCurveProfile();
-        var name = FanCurveProfileNameTextBox.Text?.Trim();
-        if (profile is null || string.IsNullOrEmpty(name))
+        if (sender is not FAMenuFlyout flyout || flyout.Popup.Child is not Control presenter)
         {
-            SetActivity("Choose an active profile and enter a name before renaming.", FAInfoBarSeverity.Warning);
             return;
         }
 
-        if (string.Equals(profile.Name, name, StringComparison.Ordinal))
+        presenter.Transitions = CreateFlyoutTransitions();
+        presenter.Opacity = 0;
+        presenter.RenderTransform = TransformOperations.Parse("translate(0px, -6px)");
+    }
+
+    private static void FanCurveProfileManageFlyoutOpened(object? sender, EventArgs e)
+    {
+        if (sender is not FAMenuFlyout flyout || flyout.Popup.Child is not Control presenter)
+        {
+            return;
+        }
+
+        presenter.Opacity = 1;
+        presenter.RenderTransform = TransformOperations.Identity;
+    }
+
+    private static Transitions CreateFlyoutTransitions() =>
+        new()
+        {
+            new DoubleTransition
+            {
+                Property = Visual.OpacityProperty,
+                Duration = TimeSpan.FromMilliseconds(150),
+                Easing = AnimatedContentClip.PowerToysEaseOutCubic,
+            },
+            new TransformOperationsTransition
+            {
+                Property = Visual.RenderTransformProperty,
+                Duration = TimeSpan.FromMilliseconds(180),
+                Easing = AnimatedContentClip.PowerToysEaseOutCubic,
+            },
+        };
+
+    private async void NewFanCurveProfileClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanEditFanCurve)
+        {
+            return;
+        }
+
+        if (!TryReadFanCurve(out var curve, out var error))
+        {
+            SetActivity(error, FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        var name = await PromptFanCurveProfileNameAsync(
+            "Create fan curve profile",
+            "Save the current curve as a new profile.",
+            "Create",
+            string.Empty);
+        if (name is null)
+        {
+            return;
+        }
+
+        if (await RunWriteAsync(
+                "Create fan curve profile",
+                async () =>
+                {
+                    await _ipc.SaveFanCurveProfileAsync(string.Empty, name, curve, true, _lifetime.Token);
+                    return true;
+                }))
+        {
+            await RefreshFanCurveAsync();
+        }
+    }
+
+    private async void RenameFanCurveProfileClick(object? sender, RoutedEventArgs e)
+    {
+        var profile = ActiveFanCurveProfile();
+        if (!CanEditFanCurve || profile is null)
+        {
+            SetActivity("Choose an active profile before renaming.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        var name = await PromptFanCurveProfileNameAsync(
+            "Rename fan curve profile",
+            $"Choose a new name for “{profile.Name}”.",
+            "Rename",
+            profile.Name);
+        if (name is null || string.Equals(profile.Name, name, StringComparison.Ordinal))
         {
             return;
         }
@@ -441,38 +622,12 @@ public partial class MainWindow : Window
                         false,
                         _lifetime.Token);
                     return true;
-                })
-            && renamed is not null)
-        {
-            ReplaceFanCurveProfile(renamed);
-        }
-    }
-
-    private async void SaveFanCurveProfileClick(object? sender, RoutedEventArgs e)
-    {
-        var name = NewFanCurveProfileNameTextBox.Text?.Trim();
-        if (string.IsNullOrEmpty(name))
-        {
-            SetActivity("Enter a profile name before saving.", FAInfoBarSeverity.Warning);
-            return;
-        }
-
-        if (!TryReadFanCurve(out var curve, out var error))
-        {
-            SetActivity(error, FAInfoBarSeverity.Warning);
-            return;
-        }
-
-        if (await RunWriteAsync(
-                "Save fan curve profile",
-                async () =>
-                {
-                    await _ipc.SaveFanCurveProfileAsync(string.Empty, name, curve, true, _lifetime.Token);
-                    return true;
                 }))
         {
-            NewFanCurveProfileNameTextBox.Text = string.Empty;
-            await RefreshFanCurveAsync();
+            if (renamed is not null)
+            {
+                ReplaceFanCurveProfile(renamed);
+            }
         }
     }
 
@@ -502,12 +657,24 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void ImportFanCurveProfilesClick(object? sender, RoutedEventArgs e)
+    private async void ImportFanCurveProfilesFromClipboardClick(object? sender, RoutedEventArgs e)
     {
-        var code = FanCurveProfileImportCodeTextBox.Text?.Trim();
+        if (!CanEditFanCurve)
+        {
+            return;
+        }
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            SetActivity("The system clipboard is unavailable.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        var code = (await clipboard.TryGetTextAsync())?.Trim();
         if (string.IsNullOrEmpty(code))
         {
-            SetActivity("Paste a profile code before importing.", FAInfoBarSeverity.Warning);
+            SetActivity("The clipboard does not contain a profile code.", FAInfoBarSeverity.Warning);
             return;
         }
 
@@ -515,7 +682,6 @@ public partial class MainWindow : Window
                 "Import fan curve profiles",
                 () => _ipc.ImportFanCurveProfilesAsync(code, _lifetime.Token)))
         {
-            FanCurveProfileImportCodeTextBox.Text = string.Empty;
             await RefreshFanCurveAsync();
         }
     }
@@ -523,7 +689,7 @@ public partial class MainWindow : Window
     private async void DeleteFanCurveProfileClick(object? sender, RoutedEventArgs e)
     {
         var profile = ActiveFanCurveProfile();
-        if (profile is null)
+        if (!CanEditFanCurve || profile is null)
         {
             SetActivity("Choose an active profile before deleting.", FAInfoBarSeverity.Warning);
             return;
@@ -584,33 +750,6 @@ public partial class MainWindow : Window
         if (await RunWriteAsync("Apply fan curve", () => _ipc.SetFanCurveAsync(curve, _lifetime.Token)))
         {
             await RefreshFanCurveAsync();
-        }
-    }
-
-    private async void ShowWindowClick(object? sender, RoutedEventArgs e)
-    {
-        try
-        {
-            await _ipc.ShowWindowAsync();
-            Show();
-            SetActivity("THRM Core window shown.", FAInfoBarSeverity.Success);
-        }
-        catch (Exception ex)
-        {
-            SetActivity($"Show window failed: {ex.Message}", FAInfoBarSeverity.Error);
-        }
-    }
-
-    private async void QuitCoreClick(object? sender, RoutedEventArgs e)
-    {
-        try
-        {
-            await _ipc.QuitCoreAsync();
-            SetActivity("Quit request sent; no request replay is attempted.", FAInfoBarSeverity.Informational);
-        }
-        catch (Exception ex)
-        {
-            SetActivity($"Quit core failed: {ex.Message}", FAInfoBarSeverity.Error);
         }
     }
 
@@ -698,11 +837,15 @@ public partial class MainWindow : Window
         ConnectionInfoBar.IsOpen = !connected;
         _deviceStateKnown = false;
         _configKnown = false;
+        if (!connected)
+        {
+            _deviceFanMaximumRpm = FanRatedRpm.Resolve(null, _deviceModel);
+            UpdateTemperatureHistoryPreviews();
+        }
         _fanCurveKnown = connected && _fanCurveKnown;
         _temperatureHistoryKnown = connected && _temperatureHistoryKnown;
         if (!connected)
         {
-            FanCurveStateText.Text = "Fan curve editing unavailable: THRM Core is not connected.";
             TemperatureHistoryStateText.Text = "Temperature history unavailable: THRM Core is not connected.";
         }
         SetActionAvailability();
@@ -783,7 +926,9 @@ public partial class MainWindow : Window
         ModeText.Text = EmptyDash(status.CurrentData?.WorkMode);
         if (status.CurrentData is null)
         {
+            _deviceFanMaximumRpm = FanRatedRpm.Resolve(null, _deviceModel);
             FanText.Text = "—";
+            UpdateTemperatureHistoryPreviews();
         }
         else
         {
@@ -809,8 +954,12 @@ public partial class MainWindow : Window
         LastUpdateText.Text = $"Temperature update: {DateTime.Now:HH:mm:ss}";
     }
 
-    private void ApplyFanData(FanDataSnapshot fanData) =>
+    private void ApplyFanData(FanDataSnapshot fanData)
+    {
+        _deviceFanMaximumRpm = FanRatedRpm.Resolve(fanData, _deviceModel);
         FanText.Text = $"{fanData.CurrentRpm} RPM → {fanData.TargetRpm} RPM";
+        UpdateTemperatureHistoryPreviews();
+    }
 
     private void SetActionAvailability()
     {
@@ -847,18 +996,15 @@ public partial class MainWindow : Window
         var canEditFanCurve = CanEditFanCurve;
         var activeFanCurveProfile = ActiveFanCurveProfile();
         FanCurveProfileComboBox.IsEnabled = canEditFanCurve && _fanCurveProfiles.Count > 1;
-        FanCurveProfileNameTextBox.IsEnabled = canEditFanCurve && activeFanCurveProfile is not null;
-        RenameFanCurveProfileButton.IsEnabled = canEditFanCurve && activeFanCurveProfile is not null;
-        NewFanCurveProfileNameTextBox.IsEnabled = canEditFanCurve;
-        SaveFanCurveProfileButton.IsEnabled = canEditFanCurve;
-        ExportFanCurveProfilesButton.IsEnabled = canEditFanCurve;
-        FanCurveProfileImportCodeTextBox.IsEnabled = canEditFanCurve;
-        ImportFanCurveProfilesButton.IsEnabled = canEditFanCurve;
-        DeleteFanCurveProfileButton.IsEnabled = canEditFanCurve
+        FanCurveProfileManageButton.IsEnabled = canEditFanCurve && _fanCurveProfiles.Count > 0;
+        FanCurveNewProfileMenuItem.IsEnabled = canEditFanCurve;
+        FanCurveRenameProfileMenuItem.IsEnabled = canEditFanCurve && activeFanCurveProfile is not null;
+        FanCurveDeleteProfileMenuItem.IsEnabled = canEditFanCurve
             && activeFanCurveProfile is not null
             && _fanCurveProfiles.Count > 1;
+        FanCurveExportProfilesMenuItem.IsEnabled = canEditFanCurve;
+        FanCurveImportProfilesMenuItem.IsEnabled = canEditFanCurve;
         ResetLearnedOffsetsButton.IsEnabled = canEditFanCurve;
-        ReloadFanCurveButton.IsEnabled = _ipc.IsConnected && !_fanCurveLoading && !_writeInProgress;
         ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurve.Count >= 2;
         FanCurvePreview.IsEditable = canEditFanCurve;
 
@@ -868,7 +1014,6 @@ public partial class MainWindow : Window
             && !_writeInProgress;
         TemperatureHistoryEnabledSwitch.IsEnabled = canManageTemperatureHistory;
         TemperatureHistoryRetentionComboBox.IsEnabled = canManageTemperatureHistory;
-        ReloadTemperatureHistoryButton.IsEnabled = _ipc.IsConnected && !_temperatureHistoryLoading && !_writeInProgress;
     }
 
     private async Task RefreshFanCurveAsync()
@@ -876,13 +1021,11 @@ public partial class MainWindow : Window
         if (!_ipc.IsConnected)
         {
             _fanCurveKnown = false;
-            FanCurveStateText.Text = "Fan curve editing unavailable: THRM Core is not connected.";
             SetActionAvailability();
             return;
         }
 
         _fanCurveLoading = true;
-        FanCurveStateText.Text = "Loading the active curve from THRM Core...";
         SetActionAvailability();
         try
         {
@@ -891,14 +1034,10 @@ public partial class MainWindow : Window
             await Task.WhenAll(curveTask, profilesTask);
             ApplyFanCurve(curveTask.Result, profilesTask.Result);
             _fanCurveKnown = _fanCurve.Count >= 2;
-            FanCurveStateText.Text = _fanCurveKnown
-                ? "Active curve loaded from THRM Core."
-                : "THRM Core returned an incomplete curve.";
         }
         catch (Exception ex)
         {
             _fanCurveKnown = false;
-            FanCurveStateText.Text = "Fan curve could not be loaded; known values were retained.";
             SetActivity($"Fan curve refresh failed: {ex.Message}", FAInfoBarSeverity.Error);
         }
         finally
@@ -1022,6 +1161,9 @@ public partial class MainWindow : Window
     private void UpdateTemperatureHistoryPreviews()
     {
         var points = _temperatureHistory.ToArray();
+        TemperatureHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
+        PowerHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
+        TemperatureHistoryPreview.DeviceFanMaximumRpm = _deviceFanMaximumRpm;
         TemperatureHistoryPreview.Points = points;
         PowerHistoryPreview.Points = points;
     }
@@ -1091,7 +1233,6 @@ public partial class MainWindow : Window
             var activeProfile = ActiveFanCurveProfile();
             FanCurveProfileComboBox.ItemsSource = _fanCurveProfiles.ToArray();
             FanCurveProfileComboBox.SelectedItem = activeProfile;
-            FanCurveProfileNameTextBox.Text = activeProfile?.Name ?? string.Empty;
 
             _fanCurve.Clear();
             _fanCurve.AddRange(curve.Select(point => new FanCurvePoint
@@ -1179,7 +1320,6 @@ public partial class MainWindow : Window
             _fanCurveProfiles[index] = profile;
             FanCurveProfileComboBox.ItemsSource = _fanCurveProfiles.ToArray();
             FanCurveProfileComboBox.SelectedItem = profile;
-            FanCurveProfileNameTextBox.Text = profile.Name;
         }
         finally
         {
@@ -1199,6 +1339,46 @@ public partial class MainWindow : Window
         };
 
         return await dialog.ShowAsync(this) == FAContentDialogResult.Primary;
+    }
+
+    private async Task<string?> PromptFanCurveProfileNameAsync(
+        string title,
+        string message,
+        string primaryButtonText,
+        string initialName)
+    {
+        var input = new TextBox
+        {
+            Text = initialName,
+            PlaceholderText = "Profile name",
+            MaxLength = 6,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        var dialog = new FAContentDialog
+        {
+            Title = title,
+            Content = new StackPanel
+            {
+                Spacing = 10,
+                Children =
+                {
+                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+                    input,
+                },
+            },
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Cancel",
+            DefaultButton = FAContentDialogButton.Primary,
+        };
+
+        var result = await dialog.ShowAsync(this);
+        var name = input.Text?.Trim();
+        if (result != FAContentDialogResult.Primary || string.IsNullOrEmpty(name))
+        {
+            return null;
+        }
+
+        return name;
     }
 
     private bool TryReadFanCurve(out List<FanCurvePoint> curve, out string error)

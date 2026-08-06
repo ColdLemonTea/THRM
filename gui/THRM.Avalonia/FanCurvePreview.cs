@@ -1,5 +1,7 @@
 using System.Globalization;
 using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -8,7 +10,7 @@ using Avalonia.Styling;
 
 namespace THRM.Avalonia;
 
-public sealed class FanCurvePreview : Control
+public sealed class FanCurvePreview : Decorator
 {
     private const double MinTemperature = 30;
     private const double MaxTemperature = 110;
@@ -19,6 +21,16 @@ public sealed class FanCurvePreview : Control
     private int? _hoveredIndex;
     private int? _draggedIndex;
     private int? _selectedIndex;
+    private bool _hasTooltipPosition;
+    private Point _tooltipAnchor;
+    private readonly Canvas _overlayCanvas;
+    private readonly Border _tooltip;
+    private readonly ExperimentalAcrylicBorder _tooltipAcrylic;
+    private readonly Grid _tooltipContent;
+    private readonly StackPanel _tooltipRows;
+    private readonly TextBlock _tooltipTemperature;
+    private readonly ChartTooltipRow _tooltipBaseRow;
+    private readonly ChartTooltipRow _tooltipEffectiveRow;
 
     public static readonly StyledProperty<IReadOnlyList<FanCurvePoint>?> PointsProperty =
         AvaloniaProperty.Register<FanCurvePreview, IReadOnlyList<FanCurvePoint>?>(nameof(Points));
@@ -29,7 +41,11 @@ public sealed class FanCurvePreview : Control
     public static readonly StyledProperty<bool> IsEditableProperty =
         AvaloniaProperty.Register<FanCurvePreview, bool>(nameof(IsEditable));
 
-    static FanCurvePreview() => AffectsRender<FanCurvePreview>(PointsProperty, LearnedPointsProperty, IsEditableProperty);
+    private static readonly StyledProperty<Point> TooltipPositionProperty =
+        AvaloniaProperty.Register<FanCurvePreview, Point>(nameof(TooltipPosition));
+
+    static FanCurvePreview() =>
+        AffectsRender<FanCurvePreview>(PointsProperty, LearnedPointsProperty, IsEditableProperty, TooltipPositionProperty);
 
     public FanCurvePreview()
     {
@@ -44,6 +60,26 @@ public sealed class FanCurvePreview : Control
         PointerReleased += OnPointerReleased;
         PointerCaptureLost += OnPointerCaptureLost;
         PointerExited += OnPointerExited;
+
+        _tooltip = ChartTooltipOverlay.Create(out _tooltipAcrylic, out _tooltipContent);
+        _tooltipRows = ChartTooltipOverlay.CreateRows(_tooltipContent);
+        _tooltipTemperature = ChartTooltipOverlay.CreateText(12);
+        _tooltipBaseRow = ChartTooltipOverlay.CreateRow(withDot: false);
+        _tooltipEffectiveRow = ChartTooltipOverlay.CreateRow(withDot: false);
+        ChartTooltipOverlay.AddTitle(_tooltipContent, _tooltipTemperature);
+        _tooltipRows.Children.Add(_tooltipBaseRow.Root);
+        _tooltipRows.Children.Add(_tooltipEffectiveRow.Root);
+        _overlayCanvas = new Canvas
+        {
+            IsHitTestVisible = false,
+        };
+        _overlayCanvas.Children.Add(_tooltip);
+        Child = _overlayCanvas;
+        ActualThemeVariantChanged += (_, _) =>
+        {
+            InvalidateVisual();
+            RefreshTooltip();
+        };
     }
 
     public event EventHandler<FanCurvePointDragEventArgs>? PointDragged;
@@ -66,9 +102,40 @@ public sealed class FanCurvePreview : Control
         set => SetValue(IsEditableProperty, value);
     }
 
-    protected override Size MeasureOverride(Size availableSize) => new(
-        Desired(DefaultWidth, availableSize.Width),
-        Desired(DefaultHeight, availableSize.Height));
+    private Point TooltipPosition
+    {
+        get => GetValue(TooltipPositionProperty);
+        set => SetValue(TooltipPositionProperty, value);
+    }
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        var size = new Size(
+            Desired(DefaultWidth, availableSize.Width),
+            Desired(DefaultHeight, availableSize.Height));
+        _overlayCanvas.Measure(size);
+        return size;
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        _overlayCanvas.Arrange(new Rect(finalSize));
+        return finalSize;
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == TooltipPositionProperty)
+        {
+            ChartTooltipOverlay.SetPosition(_tooltip, TooltipPosition);
+        }
+        else if (change.Property == PointsProperty
+            || change.Property == LearnedPointsProperty)
+        {
+            RefreshTooltip();
+        }
+    }
 
     public override void Render(DrawingContext context)
     {
@@ -98,10 +165,46 @@ public sealed class FanCurvePreview : Control
         var surface = FindBrush(
             dark ? new SolidColorBrush(Color.FromRgb(45, 45, 45)) : new SolidColorBrush(Colors.White),
             "CardBackgroundFillColorDefaultBrush", "SystemControlBackgroundBaseLowBrush");
-        var border = FindBrush(
-            dark ? new SolidColorBrush(Color.FromArgb(96, 255, 255, 255)) : new SolidColorBrush(Color.FromArgb(80, 0, 0, 0)),
-            "CardStrokeColorDefaultBrush", "DividerStrokeColorDefaultBrush");
+        DrawChartScene(context, plot, primary, secondary, grid, accent, learned, surface);
+        DrawTooltipBlur(context, plot, primary, secondary, grid, accent, learned, surface, dark);
+    }
 
+    private void DrawTooltipBlur(
+        DrawingContext context,
+        Rect plot,
+        IBrush primary,
+        IBrush secondary,
+        IBrush grid,
+        IBrush accent,
+        IBrush learned,
+        IBrush surface,
+        bool dark)
+    {
+        if (!_hasTooltipPosition || !_tooltip.IsVisible
+            || !double.IsFinite(_tooltip.Width) || !double.IsFinite(_tooltip.Height))
+        {
+            return;
+        }
+
+        var region = new Rect(TooltipPosition, new Size(_tooltip.Width, _tooltip.Height));
+        ChartTooltipOverlay.DrawLocalBlur(
+            context,
+            region,
+            Bounds.Size,
+            dark,
+            blurred => DrawChartScene(blurred, plot, primary, secondary, grid, accent, learned, surface));
+    }
+
+    private void DrawChartScene(
+        DrawingContext context,
+        Rect plot,
+        IBrush primary,
+        IBrush secondary,
+        IBrush grid,
+        IBrush accent,
+        IBrush learned,
+        IBrush surface)
+    {
         var gridPen = new Pen(grid, 1);
         foreach (var rpm in new[] { 0, 1000, 2000, 3000, 4000 })
         {
@@ -138,7 +241,8 @@ public sealed class FanCurvePreview : Control
             return;
         }
 
-        using (context.PushClip(plot))
+        // Keep the full pen visible when a curve endpoint or hover line lands on the plot edge.
+        using (context.PushClip(new Rect(plot.X - 1.25, plot.Y - 1.25, plot.Width + 2.5, plot.Height + 2.5)))
         {
             DrawCurve(context, LearnedPoints, plot, new Pen(learned, 2, new DashStyle(new[] { 5d, 3d }, 0)));
             DrawCurve(context, basePoints, plot, new Pen(accent, 2.5));
@@ -155,14 +259,7 @@ public sealed class FanCurvePreview : Control
         for (var index = 0; index < basePoints.Count; index++)
         {
             var point = PointFor(basePoints[index], plot);
-            var isActive = index == _draggedIndex || index == _selectedIndex;
-            var radius = isActive ? 6 : 4.5;
-            context.DrawEllipse(accent, new Pen(surface, 2), point, radius, radius);
-        }
-
-        if (_hoveredIndex is { } tooltipIndex && tooltipIndex >= 0 && tooltipIndex < basePoints.Count)
-        {
-            DrawTooltip(context, plot, basePoints, tooltipIndex, primary, secondary, surface, border);
+            context.DrawEllipse(accent, new Pen(surface, 2), point, 4.5, 4.5);
         }
     }
 
@@ -214,6 +311,7 @@ public sealed class FanCurvePreview : Control
         _draggedIndex = index;
         _selectedIndex = index;
         _hoveredIndex = index;
+        UpdateTooltipTarget(index.Value, e.GetPosition(this), plot);
         e.Pointer.Capture(this);
         Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
         InvalidateVisual();
@@ -238,6 +336,7 @@ public sealed class FanCurvePreview : Control
         if (_draggedIndex is { } dragged)
         {
             UpdateDraggedPoint(dragged, e.GetPosition(this), plot);
+            UpdateTooltipTarget(dragged, e.GetPosition(this), plot);
             return;
         }
 
@@ -253,6 +352,15 @@ public sealed class FanCurvePreview : Control
             InvalidateVisual();
         }
 
+        if (next is { } index && Points is { Count: > 0 } points && index < points.Count)
+        {
+            UpdateTooltipTarget(index, pointer, plot);
+        }
+        else
+        {
+            ClearHover();
+        }
+
         Cursor = IsEditable && HitTestPoint(pointer, plot) is not null
             ? new Cursor(StandardCursorType.SizeNorthSouth)
             : Cursor.Default;
@@ -264,14 +372,12 @@ public sealed class FanCurvePreview : Control
 
     private void OnPointerExited(object? sender, PointerEventArgs e)
     {
-        if (_draggedIndex is not null || _hoveredIndex is null)
+        if (_draggedIndex is not null)
         {
             return;
         }
 
-        _hoveredIndex = null;
-        Cursor = Cursor.Default;
-        InvalidateVisual();
+        ClearHover();
     }
 
     private void EndDrag(IPointer pointer)
@@ -305,6 +411,111 @@ public sealed class FanCurvePreview : Control
 
         PointDragged?.Invoke(this, new FanCurvePointDragEventArgs(index, rpm));
     }
+
+    private void UpdateTooltipTarget(int index, Point pointer, Rect plot)
+    {
+        if (Points is not { Count: > 0 } points || index < 0 || index >= points.Count)
+        {
+            ClearHover();
+            return;
+        }
+
+        var learnedPoint = LearnedPoints is { Count: > 0 } learned && index < learned.Count ? learned[index] : null;
+        var anchor = new Point(PointFor(points[index], plot).X, pointer.Y);
+        var size = TooltipSize(learnedPoint);
+        UpdateTooltipOverlay(points[index], learnedPoint);
+        SetTooltipTarget(anchor, size);
+    }
+
+    private void SetTooltipTarget(Point anchor, Size card)
+    {
+        _tooltipAnchor = anchor;
+        var target = ChartTooltipMotion.CardTarget(anchor, Bounds.Size, card);
+        if (!_hasTooltipPosition)
+        {
+            _hasTooltipPosition = true;
+            Transitions = null;
+            SetValue(TooltipPositionProperty, target);
+            ChartTooltipOverlay.SetPosition(_tooltip, target);
+            Transitions = CreateTooltipTransitions();
+            return;
+        }
+
+        SetValue(TooltipPositionProperty, target);
+    }
+
+    private void ClearHover()
+    {
+        _hasTooltipPosition = false;
+        _tooltip.IsVisible = false;
+        if (_hoveredIndex is null)
+        {
+            return;
+        }
+
+        _hoveredIndex = null;
+        Cursor = Cursor.Default;
+        InvalidateVisual();
+    }
+
+    private void RefreshTooltip()
+    {
+        if (!_hasTooltipPosition || _hoveredIndex is not { } index || Points is not { Count: > 0 } points
+            || index < 0 || index >= points.Count)
+        {
+            return;
+        }
+
+        var learnedPoint = LearnedPoints is { Count: > 0 } learned && index < learned.Count ? learned[index] : null;
+        UpdateTooltipOverlay(points[index], learnedPoint);
+        SetTooltipTarget(_tooltipAnchor, TooltipSize(learnedPoint));
+    }
+
+    private void UpdateTooltipOverlay(FanCurvePoint basePoint, FanCurvePoint? learnedPoint)
+    {
+        var dark = ActualThemeVariant == ThemeVariant.Dark;
+        var primary = FindBrush(
+            dark ? new SolidColorBrush(Colors.White) : new SolidColorBrush(Colors.Black),
+            "TextFillColorPrimaryBrush");
+        var secondary = FindBrush(
+            dark ? new SolidColorBrush(Color.FromRgb(210, 210, 210)) : new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+            "TextFillColorSecondaryBrush");
+        var border = FindBrush(
+            dark ? new SolidColorBrush(Color.FromArgb(96, 255, 255, 255)) : new SolidColorBrush(Color.FromArgb(80, 0, 0, 0)),
+            "CardStrokeColorDefaultBrush", "DividerStrokeColorDefaultBrush");
+
+        _tooltipTemperature.Text = $"{basePoint.Temperature} °C";
+        _tooltipTemperature.Foreground = primary;
+        _tooltipBaseRow.Label.Text = "Base curve";
+        _tooltipBaseRow.Label.Foreground = secondary;
+        _tooltipBaseRow.Value.Text = $"{basePoint.Rpm:N0} RPM";
+        _tooltipBaseRow.Value.Foreground = secondary;
+        _tooltipBaseRow.IsVisible = true;
+        _tooltipEffectiveRow.Label.Text = "Effective";
+        _tooltipEffectiveRow.Label.Foreground = secondary;
+        _tooltipEffectiveRow.Value.Text = learnedPoint is null ? string.Empty : $"{learnedPoint.Rpm:N0} RPM";
+        _tooltipEffectiveRow.Value.Foreground = secondary;
+        _tooltipEffectiveRow.IsVisible = learnedPoint is not null;
+
+        ChartTooltipOverlay.Configure(
+            _tooltip,
+            _tooltipAcrylic,
+            _tooltipContent,
+            TooltipSize(learnedPoint),
+            border,
+            dark);
+    }
+
+    private static Transitions CreateTooltipTransitions() =>
+        new()
+        {
+            new PointTransition
+            {
+                Property = TooltipPositionProperty,
+                Duration = TimeSpan.FromMilliseconds(100),
+                Easing = new CubicEaseOut(),
+            },
+        };
 
     private int? HitTestPoint(Point pointer, Rect plot)
     {
@@ -380,32 +591,10 @@ public sealed class FanCurvePreview : Control
         }
     }
 
-    private void DrawTooltip(
-        DrawingContext context,
-        Rect plot,
-        IReadOnlyList<FanCurvePoint> basePoints,
-        int index,
-        IBrush primary,
-        IBrush secondary,
-        IBrush surface,
-        IBrush border)
-    {
-        var basePoint = basePoints[index];
-        var learnedPoint = LearnedPoints is { Count: > 0 } points && index < points.Count ? points[index] : null;
-        var location = PointFor(basePoint, plot);
-        var height = learnedPoint is null ? 54 : 72;
-        var width = learnedPoint is null ? 152 : 184;
-        var x = location.X + 12 + width <= Bounds.Width ? location.X + 12 : location.X - width - 12;
-        var y = Math.Clamp(location.Y - height / 2, plot.Top + 6, plot.Bottom - height - 6);
-        var card = new Rect(x, y, width, height);
-        context.DrawRectangle(surface, new Pen(border, 1), card, 4, 4);
-        DrawText(context, primary, $"{basePoint.Temperature} °C", new Point(card.Left + 10, card.Top + 8), 12);
-        DrawText(context, secondary, $"Base curve   {basePoint.Rpm:N0} RPM", new Point(card.Left + 10, card.Top + 28));
-        if (learnedPoint is not null)
-        {
-            DrawText(context, secondary, $"Effective     {learnedPoint.Rpm:N0} RPM", new Point(card.Left + 10, card.Top + 47));
-        }
-    }
+    private static Size TooltipSize(FanCurvePoint? learnedPoint) =>
+        learnedPoint is null
+            ? new Size(152, 54 + ChartTooltipOverlay.RowsBottomPadding)
+            : new Size(184, 72 + ChartTooltipOverlay.RowsBottomPadding);
 
     private static Point PointFor(FanCurvePoint point, Rect plot) => new(X(point.Temperature, plot), Y(point.Rpm, plot));
 
@@ -430,7 +619,7 @@ public sealed class FanCurvePreview : Control
     {
         foreach (var key in keys)
         {
-            if (this.TryFindResource(key, out var value))
+            if (this.TryFindResource(key, ActualThemeVariant, out var value))
             {
                 if (value is IBrush brush)
                 {

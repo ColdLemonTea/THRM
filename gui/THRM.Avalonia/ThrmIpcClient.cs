@@ -631,8 +631,10 @@ public sealed class DeviceStatusSnapshot
 
 public sealed class FanDataSnapshot
 {
+    [JsonPropertyName("gearSettings")] public int? GearSettings { get; init; }
     [JsonPropertyName("currentRpm")] public int CurrentRpm { get; init; }
     [JsonPropertyName("targetRpm")] public int TargetRpm { get; init; }
+    [JsonPropertyName("maxGear")] public string? MaxGear { get; init; }
     [JsonPropertyName("workMode")] public string? WorkMode { get; init; }
 }
 

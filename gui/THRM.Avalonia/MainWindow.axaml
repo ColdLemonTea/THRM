@@ -7,10 +7,12 @@
         xmlns:icons="using:FluentIcons.Avalonia.Fluent"
         x:Class="THRM.Avalonia.MainWindow"
         Title="THRM"
-        Width="760"
-        Height="480"
+        Width="960"
+        Height="640"
         MinWidth="720"
         MinHeight="440"
+        TransparencyLevelHint="Mica,None"
+        TransparencyBackgroundFallback="{DynamicResource ApplicationPageBackgroundThemeBrush}"
         WindowStartupLocation="CenterScreen">
   <Window.Resources>
     <sys:TimeSpan x:Key="SplitViewPaneAnimationCloseDuration">00:00:00.167</sys:TimeSpan>
@@ -33,12 +35,16 @@
                           Content="{TemplateBinding Header}"
                           Theme="{StaticResource SettingsExpanderToggleButtonStyle}" />
 
-            <local:AnimatedContentClip Name="ExpanderContentClip">
+            <local:AnimatedContentClip Name="ExpanderContentClip"
+                                       IsExpanded="{TemplateBinding IsExpanded}">
               <local:AnimatedContentClip.Transitions>
                 <Transitions>
                   <DoubleTransition Property="RevealProgress"
-                                    Duration="00:00:00.167"
-                                    Easing="0,0,0,1" />
+                                    Duration="00:00:00.250"
+                                    Easing="CubicEaseOut" />
+                  <DoubleTransition Property="Opacity"
+                                    Duration="00:00:00.200"
+                                    Easing="CubicEaseOut" />
                 </Transitions>
               </local:AnimatedContentClip.Transitions>
               <Border Name="ExpanderContent"
@@ -59,12 +65,6 @@
         </ControlTemplate>
       </Setter>
 
-      <Style Selector="^ /template/ local|AnimatedContentClip#ExpanderContentClip">
-        <Setter Property="RevealProgress" Value="0" />
-      </Style>
-      <Style Selector="^:expanded /template/ local|AnimatedContentClip#ExpanderContentClip">
-        <Setter Property="RevealProgress" Value="1" />
-      </Style>
     </ControlTheme>
 
     <ControlTheme x:Key="THRMSettingsExpanderTheme"
@@ -102,13 +102,13 @@
   </Window.Resources>
 
   <Window.Styles>
-    <Style Selector="local|SmoothScrollViewer.page-scroll">
+    <Style Selector="ScrollViewer.page-scroll">
       <Setter Property="IsScrollChainingEnabled" Value="True" />
       <Setter Property="IsScrollInertiaEnabled" Value="True" />
     </Style>
   </Window.Styles>
 
-  <Grid Background="{DynamicResource ApplicationPageBackgroundThemeBrush}">
+  <Grid>
     <ui:FANavigationView
                          x:Name="NavigationView"
                          PaneDisplayMode="LeftCompact"
@@ -144,11 +144,6 @@
             <icons:FluentIconSource Icon="PlugConnected" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
-        <ui:FANavigationViewItem Content="Core" Tag="core">
-          <ui:FANavigationViewItem.IconSource>
-            <icons:FluentIconSource Icon="Server" />
-          </ui:FANavigationViewItem.IconSource>
-        </ui:FANavigationViewItem>
       </ui:FANavigationView.MenuItems>
       <ui:FANavigationView.FooterMenuItems>
         <ui:FANavigationViewItem Content="About" Tag="about">
@@ -166,17 +161,13 @@
                         Severity="Warning"
                         Title="THRM Core connection lost"
                         Message="Retrying connection without replaying writes." />
-          <TransitioningContentControl x:Name="PageHost" Grid.Row="1" ClipToBounds="True">
-            <TransitioningContentControl.PageTransition>
-              <animation:CompositePageTransition>
-                <animation:CrossFade Duration="00:00:00.167"
-                                     FadeInEasing="0,0,0,1"
-                                     FadeOutEasing="1,1,0,1" />
-              </animation:CompositePageTransition>
-            </TransitioningContentControl.PageTransition>
-          </TransitioningContentControl>
-          <Grid x:Name="PageCache" Grid.Row="1" IsVisible="False">
-          <local:SmoothScrollViewer x:Name="StatusPage"
+          <ui:FAFrame x:Name="PageFrame"
+                      Grid.Row="1"
+                      ClipToBounds="True"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch" />
+          <Grid x:Name="PageDefinitions" Grid.Row="1" IsVisible="False">
+          <ScrollViewer x:Name="StatusPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -319,9 +310,9 @@
               </Border>
 
            </StackPanel>
-          </local:SmoothScrollViewer>
+          </ScrollViewer>
 
-          <local:SmoothScrollViewer x:Name="FanCurvePage"
+          <ScrollViewer x:Name="FanCurvePage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -332,89 +323,6 @@
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                            TextWrapping="Wrap" />
               </StackPanel>
-
-              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
-                                     Header="Curve profile"
-                                     Description="Choose the saved curve THRM Core should use."
-                                     IsExpanded="True">
-                <ui:FASettingsExpander.IconSource>
-                  <icons:FluentIconSource Icon="ChartMultiple" />
-                </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Content="Active profile"
-                                           Description="Changing the selection applies that saved profile immediately.">
-                  <ComboBox x:Name="FanCurveProfileComboBox"
-                            HorizontalAlignment="Stretch"
-                            IsEnabled="False"
-                            SelectionChanged="FanCurveProfileSelectionChanged" />
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Profile name"
-                                           Description="Rename the active saved profile without applying editor changes.">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <TextBox x:Name="FanCurveProfileNameTextBox"
-                             PlaceholderText="Profile name"
-                             IsEnabled="False" />
-                    <Button x:Name="RenameFanCurveProfileButton"
-                            Grid.Column="1"
-                            Content="Rename"
-                            Click="RenameFanCurveProfileClick"
-                            IsEnabled="False" />
-                  </Grid>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Save as new profile"
-                                           Description="Keep the current editor values as a separate saved profile.">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <TextBox x:Name="NewFanCurveProfileNameTextBox"
-                             PlaceholderText="Profile name"
-                             IsEnabled="False" />
-                    <Button x:Name="SaveFanCurveProfileButton"
-                            Grid.Column="1"
-                            Classes="accent"
-                            Content="Save"
-                            Click="SaveFanCurveProfileClick"
-                            IsEnabled="False" />
-                  </Grid>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Export saved profiles"
-                                           Description="Copy saved profiles to the clipboard. Unapplied editor changes are not included.">
-                  <ui:FASettingsExpanderItem.Footer>
-                    <Button x:Name="ExportFanCurveProfilesButton"
-                            Content="Copy code"
-                            Click="ExportFanCurveProfilesClick"
-                            IsEnabled="False" />
-                  </ui:FASettingsExpanderItem.Footer>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Import profiles"
-                                           Description="Paste a profile code exported by THRM. Its active profile becomes active here.">
-                  <StackPanel Spacing="8">
-                    <TextBox x:Name="FanCurveProfileImportCodeTextBox"
-                             AcceptsReturn="True"
-                             MinHeight="72"
-                             PlaceholderText="Paste profile code"
-                             TextWrapping="Wrap"
-                             IsEnabled="False" />
-                    <Button x:Name="ImportFanCurveProfilesButton"
-                            Content="Import"
-                            HorizontalAlignment="Right"
-                            Click="ImportFanCurveProfilesClick"
-                            IsEnabled="False" />
-                  </StackPanel>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Delete active profile"
-                                           Description="Remove the active saved profile. At least one profile must remain.">
-                  <ui:FASettingsExpanderItem.Footer>
-                    <Button x:Name="DeleteFanCurveProfileButton"
-                            Content="Delete"
-                            Click="DeleteFanCurveProfileClick"
-                            IsEnabled="False" />
-                  </ui:FASettingsExpanderItem.Footer>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Current availability.">
-                  <TextBlock x:Name="FanCurveStateText"
-                             Text="Waiting for THRM Core."
-                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap" />
-                </ui:FASettingsExpanderItem>
-              </ui:FASettingsExpander>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Curve editor"
@@ -430,26 +338,98 @@
                                           HorizontalAlignment="Stretch" />
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpander.Footer>
-                  <StackPanel Orientation="Horizontal"
-                              HorizontalAlignment="Right"
-                              Spacing="8">
-                    <Button x:Name="ReloadFanCurveButton"
-                            Content="Reload"
-                            Click="ReloadFanCurveClick"
-                            IsEnabled="False" />
-                    <Button x:Name="ApplyFanCurveButton"
-                            Classes="accent"
-                            Content="Apply changes"
-                            Click="ApplyFanCurveClick"
-                            IsEnabled="False" />
-                  </StackPanel>
+                  <Grid ColumnDefinitions="*,Auto,Auto"
+                        ColumnSpacing="8">
+                      <ui:FAComboBox x:Name="FanCurveProfileComboBox"
+                                     HorizontalAlignment="Stretch"
+                                     IsEnabled="False"
+                                     SelectionChanged="FanCurveProfileSelectionChanged">
+                        <ui:FAComboBox.Styles>
+                          <Style Selector="#FanCurveProfileComboBox /template/ Border#PopupBorder">
+                            <Setter Property="Opacity" Value="0" />
+                            <Setter Property="RenderTransform" Value="translate(0px, -6px)" />
+                            <Setter Property="Transitions">
+                              <Transitions>
+                                <DoubleTransition Property="Opacity"
+                                                  Duration="00:00:00.150"
+                                                  Easing="CubicEaseOut" />
+                                <TransformOperationsTransition Property="RenderTransform"
+                                                               Duration="00:00:00.180"
+                                                               Easing="CubicEaseOut" />
+                              </Transitions>
+                            </Setter>
+                          </Style>
+                          <Style Selector="#FanCurveProfileComboBox:dropdownopen /template/ Border#PopupBorder">
+                            <Setter Property="Opacity" Value="1" />
+                            <Setter Property="RenderTransform" Value="translate(0px, 0px)" />
+                          </Style>
+                        </ui:FAComboBox.Styles>
+                      </ui:FAComboBox>
+                      <Button x:Name="FanCurveProfileManageButton"
+                              Grid.Column="1"
+                              Content="Manage"
+                              IsEnabled="False">
+                        <Button.Flyout>
+                          <ui:FAMenuFlyout Opening="FanCurveProfileManageFlyoutOpening"
+                                           Opened="FanCurveProfileManageFlyoutOpened">
+                            <ui:FAMenuFlyoutItem x:Name="FanCurveNewProfileMenuItem"
+                                                  Text="New profile"
+                                                  Click="NewFanCurveProfileClick"
+                                                  IsEnabled="False">
+                              <ui:FAMenuFlyoutItem.IconSource>
+                                <icons:FluentIconSource Icon="Add" />
+                              </ui:FAMenuFlyoutItem.IconSource>
+                            </ui:FAMenuFlyoutItem>
+                            <ui:FAMenuFlyoutItem x:Name="FanCurveRenameProfileMenuItem"
+                                                  Text="Rename current"
+                                                  Click="RenameFanCurveProfileClick"
+                                                  IsEnabled="False">
+                              <ui:FAMenuFlyoutItem.IconSource>
+                                <icons:FluentIconSource Icon="Rename" />
+                              </ui:FAMenuFlyoutItem.IconSource>
+                            </ui:FAMenuFlyoutItem>
+                            <ui:FAMenuFlyoutItem x:Name="FanCurveDeleteProfileMenuItem"
+                                                  Text="Delete current"
+                                                  Click="DeleteFanCurveProfileClick"
+                                                  IsEnabled="False">
+                              <ui:FAMenuFlyoutItem.IconSource>
+                                <icons:FluentIconSource Icon="Delete" />
+                              </ui:FAMenuFlyoutItem.IconSource>
+                            </ui:FAMenuFlyoutItem>
+                            <ui:FAMenuFlyoutSeparator />
+                            <ui:FAMenuFlyoutItem x:Name="FanCurveExportProfilesMenuItem"
+                                                  Text="Export and copy code"
+                                                  Click="ExportFanCurveProfilesClick"
+                                                  IsEnabled="False">
+                              <ui:FAMenuFlyoutItem.IconSource>
+                                <icons:FluentIconSource Icon="ArrowExport" />
+                              </ui:FAMenuFlyoutItem.IconSource>
+                            </ui:FAMenuFlyoutItem>
+                            <ui:FAMenuFlyoutItem x:Name="FanCurveImportProfilesMenuItem"
+                                                  Text="Import code from clipboard"
+                                                  Click="ImportFanCurveProfilesFromClipboardClick"
+                                                  IsEnabled="False">
+                              <ui:FAMenuFlyoutItem.IconSource>
+                                <icons:FluentIconSource Icon="ClipboardPaste" />
+                              </ui:FAMenuFlyoutItem.IconSource>
+                            </ui:FAMenuFlyoutItem>
+                          </ui:FAMenuFlyout>
+                        </Button.Flyout>
+                      </Button>
+                      <Button x:Name="ApplyFanCurveButton"
+                              Grid.Column="2"
+                              Classes="accent"
+                              Content="Apply changes"
+                              Click="ApplyFanCurveClick"
+                              IsEnabled="False" />
+                    </Grid>
                 </ui:FASettingsExpander.Footer>
               </ui:FASettingsExpander>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Curve learning"
                                      Description="Manage the adaptive speed offsets learned by THRM Core."
-                                     IsExpanded="True">
+                                     IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="BrainCircuit" />
                 </ui:FASettingsExpander.IconSource>
@@ -464,16 +444,16 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </local:SmoothScrollViewer>
+          </ScrollViewer>
 
-          <local:SmoothScrollViewer x:Name="TemperatureHistoryPage"
+          <ScrollViewer x:Name="TemperatureHistoryPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">
               <StackPanel Spacing="4">
                 <TextBlock Text="Temperature history" FontSize="28" FontWeight="SemiBold" />
-                <TextBlock Text="Review the CPU and GPU temperatures recorded by THRM Core over time."
+                <TextBlock Text="Review CPU/GPU temperatures and device fan speed recorded by THRM Core over time."
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                            TextWrapping="Wrap" />
               </StackPanel>
@@ -481,16 +461,10 @@
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Recording"
                                      Description="THRM Core keeps this history while the application window is closed."
-                                     IsExpanded="True">
+                                     IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="History" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpander.Footer>
-                  <Button x:Name="ReloadTemperatureHistoryButton"
-                          Content="Refresh"
-                          Click="ReloadTemperatureHistoryClick"
-                          IsEnabled="False" />
-                </ui:FASettingsExpander.Footer>
                 <ui:FASettingsExpanderItem Content="Background recording"
                                            Description="Keep samples in the Core-managed history file.">
                   <ui:FASettingsExpanderItem.Footer>
@@ -522,61 +496,75 @@
               </ui:FASettingsExpander>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
-                                     Header="Recent trend"
-                                     Description="The chart shows recorded CPU and GPU temperatures."
+                                     Header="Hardware history"
+                                     Description="Review recorded CPU/GPU temperatures, device fan RPM, and power readings."
                                      IsExpanded="True">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="DataLine" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Description="Samples are shown in chronological order from the selected retention window.">
+                <ui:FASettingsExpanderItem Content="Recent trend"
+                                           Description="Samples are shown in chronological order from the selected retention window.">
                   <local:TemperatureHistoryPreview x:Name="TemperatureHistoryPreview"
                                                    Height="260"
                                                    HorizontalAlignment="Stretch" />
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="CPU temperature" Description="Peak and average across the current window.">
-                  <TextBlock x:Name="TemperatureHistoryCpuSummaryText"
-                             Text="No recorded CPU temperatures."
-                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap" />
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="GPU temperature" Description="Peak and average across the current window.">
-                  <TextBlock x:Name="TemperatureHistoryGpuSummaryText"
-                             Text="No recorded GPU temperatures."
-                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap" />
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Device fan" Description="Peak and average fan speed across the current window.">
-                  <TextBlock x:Name="TemperatureHistoryFanSummaryText"
-                             Text="No recorded fan speeds."
-                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap" />
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Last sample" Description="Latest timestamp received from THRM Core.">
-                  <TextBlock x:Name="TemperatureHistoryLastSampleText"
-                             Text="No recorded samples."
-                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap" />
-                </ui:FASettingsExpanderItem>
-              </ui:FASettingsExpander>
-
-              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
-                                     Header="Power history"
-                                     Description="Review CPU and GPU power readings recorded with the same timestamps."
-                                     IsExpanded="True">
-                <ui:FASettingsExpander.IconSource>
-                  <icons:FluentIconSource Icon="DataLine" />
-                </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Description="Hover either chart to inspect the same recorded time.">
+                <ui:FASettingsExpanderItem Content="Power history"
+                                           Description="Hover either chart to inspect the same recorded time.">
                   <local:TemperatureHistoryPreview x:Name="PowerHistoryPreview"
                                                    Metric="Power"
                                                    Height="220"
                                                    HorizontalAlignment="Stretch" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
-            </StackPanel>
-          </local:SmoothScrollViewer>
 
-          <local:SmoothScrollViewer x:Name="FanControlPage"
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Window summary"
+                                     Description="Peak, average, and latest values from the selected retention window."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="ChartMultiple" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem>
+                  <Grid Margin="0,4"
+                        ColumnDefinitions="*,*"
+                        RowDefinitions="Auto,Auto"
+                        ColumnSpacing="24"
+                        RowSpacing="12">
+                    <StackPanel Spacing="2">
+                      <TextBlock Text="CPU temperature" FontWeight="SemiBold" />
+                      <TextBlock x:Name="TemperatureHistoryCpuSummaryText"
+                                 Text="No recorded CPU temperatures."
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                      <TextBlock Text="GPU temperature" FontWeight="SemiBold" />
+                      <TextBlock x:Name="TemperatureHistoryGpuSummaryText"
+                                 Text="No recorded GPU temperatures."
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="1" Spacing="2">
+                      <TextBlock Text="Device fan" FontWeight="SemiBold" />
+                      <TextBlock x:Name="TemperatureHistoryFanSummaryText"
+                                 Text="No recorded fan speeds."
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="2">
+                      <TextBlock Text="Last sample" FontWeight="SemiBold" />
+                      <TextBlock x:Name="TemperatureHistoryLastSampleText"
+                                 Text="No recorded samples."
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Grid>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+            </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="FanControlPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -608,7 +596,7 @@
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Custom fan speed"
                                      Description="Hold the connected device at a specific target speed."
-                                     IsExpanded="True">
+                                     IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="Gauge" />
                 </ui:FASettingsExpander.IconSource>
@@ -649,7 +637,7 @@
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Manual fan control"
                                      Description="Select a Core preset and apply it to the connected device."
-                                     IsExpanded="True">
+                                     IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="Temperature" />
                 </ui:FASettingsExpander.IconSource>
@@ -711,9 +699,9 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </local:SmoothScrollViewer>
+          </ScrollViewer>
 
-          <local:SmoothScrollViewer x:Name="DeviceSettingsPage"
+          <ScrollViewer x:Name="DeviceSettingsPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -749,7 +737,7 @@
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Hardware behavior"
                                      Description="Configure supported device behavior while the device is connected."
-                                     IsExpanded="True">
+                                     IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="Settings" />
                 </ui:FASettingsExpander.IconSource>
@@ -790,43 +778,9 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </local:SmoothScrollViewer>
+          </ScrollViewer>
 
-          <local:SmoothScrollViewer x:Name="CorePage"
-                        Classes="page-scroll"
-                        HorizontalScrollBarVisibility="Disabled"
-                        VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="24" Spacing="16">
-              <StackPanel Spacing="4">
-                <TextBlock Text="Core" FontSize="28" FontWeight="SemiBold" />
-                <TextBlock Text="Refresh synchronized state or control the running THRM Core session."
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           TextWrapping="Wrap" />
-              </StackPanel>
-
-              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
-                                     Header="Core session"
-                                     Description="Refresh synchronized state or control the running THRM Core session."
-                                     IsExpanded="True">
-                <ui:FASettingsExpander.IconSource>
-                  <icons:FluentIconSource Icon="PlugConnected" />
-                </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Description="Refresh state or show the Core window.">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="Refresh" Click="RefreshClick" />
-                    <Button Content="Show window" Click="ShowWindowClick" />
-                  </StackPanel>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Quit the running THRM Core session.">
-                  <Button Content="Quit core"
-                          Click="QuitCoreClick"
-                          HorizontalAlignment="Right" />
-                </ui:FASettingsExpanderItem>
-              </ui:FASettingsExpander>
-            </StackPanel>
-          </local:SmoothScrollViewer>
-
-          <local:SmoothScrollViewer x:Name="AboutPage"
+          <ScrollViewer x:Name="AboutPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -855,7 +809,7 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </local:SmoothScrollViewer>
+          </ScrollViewer>
           </Grid>
         </Grid>
       </ui:FANavigationView.Content>
