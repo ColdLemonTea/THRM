@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TIANLI0/THRM/internal/config"
 	"github.com/TIANLI0/THRM/internal/types"
 )
 
@@ -56,9 +57,9 @@ func TestApplySpeedAvoidance_EmergencyBypass(t *testing.T) {
 
 func TestApplySpeedAvoidance_OutsideRange(t *testing.T) {
 	cfg := types.SpeedAvoidanceConfig{
-		Enabled:  true,
-		MinRPM:   1900,
-		MaxRPM:   2200,
+		Enabled:   true,
+		MinRPM:    1900,
+		MaxRPM:    2200,
 		MarginRPM: 100,
 	}
 	result, applied := applySpeedAvoidance(2500, 0, 3000, 2400, 70, 68, cfg)
@@ -72,9 +73,9 @@ func TestApplySpeedAvoidance_OutsideRange(t *testing.T) {
 
 func TestApplySpeedAvoidance_MovesDown(t *testing.T) {
 	cfg := types.SpeedAvoidanceConfig{
-		Enabled:  true,
-		MinRPM:   1900,
-		MaxRPM:   2200,
+		Enabled:   true,
+		MinRPM:    1900,
+		MaxRPM:    2200,
 		MarginRPM: 100,
 	}
 	result, applied := applySpeedAvoidance(2000, 0, 3000, 2100, 70, 72, cfg)
@@ -88,9 +89,9 @@ func TestApplySpeedAvoidance_MovesDown(t *testing.T) {
 
 func TestApplySpeedAvoidance_HeatingUpPrefersUp(t *testing.T) {
 	cfg := types.SpeedAvoidanceConfig{
-		Enabled:  true,
-		MinRPM:   1900,
-		MaxRPM:   2200,
+		Enabled:   true,
+		MinRPM:    1900,
+		MaxRPM:    2200,
 		MarginRPM: 100,
 	}
 	result, applied := applySpeedAvoidance(2000, 1800, 3000, 1800, 72, 70, cfg)
@@ -218,5 +219,41 @@ func TestFindMatchingTimeCurveScheduleRule_Disabled(t *testing.T) {
 	rule := findMatchingTimeCurveScheduleRule(schedule, now)
 	if rule != nil {
 		t.Fatal("should skip disabled rules")
+	}
+}
+
+func TestSetTimeCurveScheduleNormalizesAndPersists(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+
+	manager := config.NewManager(tmpDir, nil)
+	initial := types.GetDefaultConfig(false)
+	manager.Set(initial)
+	app := &CoreApp{configManager: manager}
+
+	err := app.SetTimeCurveSchedule(types.TimeCurveScheduleConfig{
+		Enabled: true,
+		Rules: []types.TimeCurveScheduleRule{{
+			Enabled:        true,
+			StartTime:      "not-a-time",
+			EndTime:        "",
+			CurveProfileID: "missing-profile",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("SetTimeCurveSchedule failed: %v", err)
+	}
+
+	got := manager.Get().TimeCurveSchedule
+	if !got.Enabled || len(got.Rules) != 1 {
+		t.Fatalf("schedule = %#v, want one enabled rule", got)
+	}
+	rule := got.Rules[0]
+	if rule.ID != "schedule-1" || rule.Name == "" || rule.StartTime != "00:00" || rule.EndTime != "23:59" {
+		t.Fatalf("rule normalization = %#v", rule)
+	}
+	if len(rule.Weekdays) != 7 || rule.CurveProfileID != initial.ActiveFanCurveProfileID {
+		t.Fatalf("rule fallback normalization = %#v", rule)
 	}
 }

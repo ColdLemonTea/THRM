@@ -23,6 +23,256 @@ public sealed class HistoryHoverChangedEventArgs(long? timestamp, Point? pointer
     public Point? PointerRatio { get; } = pointerRatio;
 }
 
+public readonly record struct HistoryZoomDomain(long Start, long End);
+
+public sealed class HistoryZoomChangedEventArgs(HistoryZoomDomain? domain) : EventArgs
+{
+    public HistoryZoomDomain? Domain { get; } = domain;
+}
+
+internal readonly record struct HistoryZoomSelectionResult(bool IsValid, HistoryZoomDomain? Domain);
+
+internal static class HistoryZoomLogic
+{
+    public static HistoryZoomSelectionResult Commit(
+        long fullStart,
+        long fullEnd,
+        long selectionStart,
+        long selectionEnd,
+        IEnumerable<long> sampleTimestamps)
+    {
+        if (fullStart <= 0 || fullEnd <= fullStart)
+        {
+            return new HistoryZoomSelectionResult(false, null);
+        }
+
+        var windowSamples = sampleTimestamps
+            .Where(timestamp => timestamp >= fullStart && timestamp <= fullEnd)
+            .Distinct()
+            .OrderBy(timestamp => timestamp)
+            .ToArray();
+        if (windowSamples.Length < 2)
+        {
+            return new HistoryZoomSelectionResult(false, null);
+        }
+
+        var from = Math.Clamp(Math.Min(selectionStart, selectionEnd), fullStart, fullEnd);
+        var to = Math.Clamp(Math.Max(selectionStart, selectionEnd), fullStart, fullEnd);
+        var selected = windowSamples
+            .Where(timestamp => timestamp >= from && timestamp <= to)
+            .ToArray();
+        if (selected.Length < 2)
+        {
+            return new HistoryZoomSelectionResult(false, null);
+        }
+
+        var domain = new HistoryZoomDomain(selected[0], selected[^1]);
+        return domain.Start <= windowSamples[0] && domain.End >= windowSamples[^1]
+            ? new HistoryZoomSelectionResult(true, null)
+            : new HistoryZoomSelectionResult(true, domain);
+    }
+
+    public static void SelfCheck()
+    {
+        var samples = new[] { 100L, 200L, 300L, 400L };
+        var invalid = Commit(100, 400, 120, 130, samples);
+        var zoomed = Commit(100, 400, 150, 350, samples);
+        var full = Commit(100, 400, 50, 500, samples);
+        if (invalid.IsValid
+            || !zoomed.IsValid
+            || zoomed.Domain != new HistoryZoomDomain(200, 300)
+            || !full.IsValid
+            || full.Domain is not null)
+        {
+            throw new InvalidOperationException("History zoom selection check failed.");
+        }
+    }
+}
+
+internal readonly record struct TimelineMarkerPlacement(
+    TimelineEventSnapshot Event,
+    int Row,
+    bool AnchorEnd);
+
+internal static class TimelineEventLogic
+{
+    public const int HistoryLimit = 240;
+    public const int DisplayLimit = 12;
+    public const int MaxRows = 4;
+
+    public static bool IsValid(TimelineEventSnapshot? item) =>
+        item is not null
+        && item.Timestamp > 0
+        && !string.IsNullOrWhiteSpace(item.LabelKey);
+
+    public static string Identity(TimelineEventSnapshot item) =>
+        $"{item.Timestamp}|{item.Type}|{item.LabelKey}";
+
+    public static List<TimelineEventSnapshot> Merge(
+        IEnumerable<TimelineEventSnapshot>? existing,
+        IEnumerable<TimelineEventSnapshot>? incoming)
+    {
+        var byId = new Dictionary<string, TimelineEventSnapshot>(StringComparer.Ordinal);
+        Add(existing);
+        Add(incoming);
+        return byId.Values
+            .OrderBy(item => item.Timestamp)
+            .ThenBy(item => item.Type, StringComparer.Ordinal)
+            .ThenBy(item => item.LabelKey, StringComparer.Ordinal)
+            .TakeLast(HistoryLimit)
+            .ToList();
+
+        void Add(IEnumerable<TimelineEventSnapshot>? source)
+        {
+            if (source is null)
+            {
+                return;
+            }
+
+            foreach (var item in source)
+            {
+                if (IsValid(item))
+                {
+                    byId[Identity(item)] = item;
+                }
+            }
+        }
+    }
+
+    public static IReadOnlyList<TimelineEventSnapshot> SelectVisible(
+        IReadOnlyList<TimelineEventSnapshot> events,
+        long firstTimestamp,
+        long lastTimestamp)
+    {
+        var inWindow = events
+            .Where(item => item.Timestamp >= firstTimestamp && item.Timestamp <= lastTimestamp)
+            .ToList();
+        if (inWindow.Count <= DisplayLimit)
+        {
+            return inWindow;
+        }
+
+        return inWindow
+            .Select((item, index) => (item, index))
+            .OrderByDescending(entry => Priority(entry.item.Type))
+            .ThenByDescending(entry => entry.index)
+            .Take(DisplayLimit)
+            .OrderBy(entry => entry.index)
+            .Select(entry => entry.item)
+            .ToList();
+    }
+
+    public static IReadOnlyList<TimelineMarkerPlacement> Layout(
+        IReadOnlyList<TimelineEventSnapshot> events,
+        long firstTimestamp,
+        long lastTimestamp)
+    {
+        var range = Math.Max(1d, (double)lastTimestamp - firstTimestamp);
+        var minimumGap = range * 0.07;
+        var rowLastTimestamp = new List<long>(MaxRows);
+        var result = new List<TimelineMarkerPlacement>(events.Count);
+
+        foreach (var item in events)
+        {
+            var row = -1;
+            for (var index = 0; index < rowLastTimestamp.Count; index++)
+            {
+                if (item.Timestamp - rowLastTimestamp[index] >= minimumGap)
+                {
+                    row = index;
+                    break;
+                }
+            }
+
+            if (row < 0)
+            {
+                row = rowLastTimestamp.Count < MaxRows
+                    ? rowLastTimestamp.Count
+                    : rowLastTimestamp.IndexOf(rowLastTimestamp.Min());
+            }
+
+            if (row == rowLastTimestamp.Count)
+            {
+                rowLastTimestamp.Add(item.Timestamp);
+            }
+            else
+            {
+                rowLastTimestamp[row] = item.Timestamp;
+            }
+
+            result.Add(new TimelineMarkerPlacement(
+                item,
+                row,
+                ((double)item.Timestamp - firstTimestamp) / range > 0.55));
+        }
+
+        return result;
+    }
+
+    private static int Priority(string? type) => type switch
+    {
+        "disconnect" => 3,
+        "resume" => 2,
+        "profile" => 1,
+        _ => 0,
+    };
+
+    public static void SelfCheck()
+    {
+        var duplicate = new TimelineEventSnapshot { Timestamp = 100, Type = "mode", LabelKey = "mode" };
+        var merged = Merge(
+            new[]
+            {
+                duplicate,
+                new TimelineEventSnapshot { Timestamp = 0, Type = "mode", LabelKey = "invalid" },
+                new TimelineEventSnapshot { Timestamp = 101, Type = "mode", LabelKey = " " },
+            },
+            new[]
+            {
+                duplicate,
+                new TimelineEventSnapshot { Timestamp = 200, Type = "profile", LabelKey = "profile" },
+            });
+        if (merged.Count != 2 || merged[0].Timestamp != 100 || merged[1].Timestamp != 200)
+        {
+            throw new InvalidOperationException("Timeline event merge check failed.");
+        }
+
+        var manyEvents = Enumerable.Range(0, DisplayLimit)
+            .Select(index => new TimelineEventSnapshot
+            {
+                Timestamp = 100 + index,
+                Type = "mode",
+                LabelKey = $"mode-{index}",
+            })
+            .Append(new TimelineEventSnapshot
+            {
+                Timestamp = 10,
+                Type = "disconnect",
+                LabelKey = "disconnect",
+            })
+            .OrderBy(item => item.Timestamp)
+            .ToArray();
+        var selected = SelectVisible(manyEvents, 0, 200);
+        var layout = Layout(
+            new[]
+            {
+                new TimelineEventSnapshot { Timestamp = 100, Type = "mode", LabelKey = "left" },
+                new TimelineEventSnapshot { Timestamp = 190, Type = "mode", LabelKey = "right" },
+            },
+            0,
+            200);
+        if (selected.Count != DisplayLimit
+            || selected[0].Type != "disconnect"
+            || layout.Count != 2
+            || layout.Any(item => item.Row < 0 || item.Row >= MaxRows)
+            || layout[0].AnchorEnd
+            || !layout[1].AnchorEnd)
+        {
+            throw new InvalidOperationException("Timeline event selection/layout check failed.");
+        }
+    }
+}
+
 internal static class ChartTooltipMotion
 {
     private const double Gap = 14;
@@ -363,10 +613,15 @@ public sealed class TemperatureHistoryPreview : Decorator
     private IReadOnlyList<TemperatureHistoryPointSnapshot>? _cachedSource;
     private int _cachedMaximumPoints = -1;
     private int _cachedWindowHours = -1;
+    private HistoryZoomDomain? _cachedZoomDomain;
     private List<TemperatureHistoryPointSnapshot> _cachedAllSamples = [];
     private List<TemperatureHistoryPointSnapshot> _cachedSamples = [];
     private bool _hasTooltipPosition;
     private Point _tooltipAnchor;
+    private bool _isSelecting;
+    private Point _selectionStart;
+    private Point _selectionCurrent;
+    private IPointer? _selectionPointer;
     private readonly Canvas _overlayCanvas;
     private readonly Border _tooltip;
     private readonly ExperimentalAcrylicBorder _tooltipAcrylic;
@@ -380,6 +635,9 @@ public sealed class TemperatureHistoryPreview : Decorator
     public static readonly StyledProperty<IReadOnlyList<TemperatureHistoryPointSnapshot>?> PointsProperty =
         AvaloniaProperty.Register<TemperatureHistoryPreview, IReadOnlyList<TemperatureHistoryPointSnapshot>?>(nameof(Points));
 
+    public static readonly StyledProperty<IReadOnlyList<TimelineEventSnapshot>?> TimelineEventsProperty =
+        AvaloniaProperty.Register<TemperatureHistoryPreview, IReadOnlyList<TimelineEventSnapshot>?>(nameof(TimelineEvents));
+
     public static readonly StyledProperty<HistoryMetric> MetricProperty =
         AvaloniaProperty.Register<TemperatureHistoryPreview, HistoryMetric>(nameof(Metric));
 
@@ -392,16 +650,21 @@ public sealed class TemperatureHistoryPreview : Decorator
     public static readonly StyledProperty<long?> HoverTimestampProperty =
         AvaloniaProperty.Register<TemperatureHistoryPreview, long?>(nameof(HoverTimestamp));
 
+    public static readonly StyledProperty<HistoryZoomDomain?> ZoomDomainProperty =
+        AvaloniaProperty.Register<TemperatureHistoryPreview, HistoryZoomDomain?>(nameof(ZoomDomain));
+
     private static readonly StyledProperty<Point> TooltipPositionProperty =
         AvaloniaProperty.Register<TemperatureHistoryPreview, Point>(nameof(TooltipPosition));
 
     static TemperatureHistoryPreview() =>
         AffectsRender<TemperatureHistoryPreview>(
             PointsProperty,
+            TimelineEventsProperty,
             MetricProperty,
             DeviceFanMaximumRpmProperty,
             HistoryWindowHoursProperty,
             HoverTimestampProperty,
+            ZoomDomainProperty,
             TooltipPositionProperty);
 
     public TemperatureHistoryPreview()
@@ -412,7 +675,11 @@ public sealed class TemperatureHistoryPreview : Decorator
             "Read-only CPU, GPU, and THRM device fan history. Hover anywhere in the chart to inspect the closest recorded time.");
         PointerEntered += OnPointerEntered;
         PointerMoved += OnPointerMoved;
+        PointerPressed += OnPointerPressed;
+        PointerReleased += OnPointerReleased;
+        PointerCaptureLost += OnPointerCaptureLost;
         PointerExited += OnPointerExited;
+        DoubleTapped += OnDoubleTapped;
 
         _tooltip = ChartTooltipOverlay.Create(out _tooltipAcrylic, out _tooltipContent);
         _tooltipRows = ChartTooltipOverlay.CreateRows(_tooltipContent);
@@ -438,11 +705,18 @@ public sealed class TemperatureHistoryPreview : Decorator
     }
 
     public event EventHandler<HistoryHoverChangedEventArgs>? HoverChanged;
+    public event EventHandler<HistoryZoomChangedEventArgs>? ZoomChanged;
 
     public IReadOnlyList<TemperatureHistoryPointSnapshot>? Points
     {
         get => GetValue(PointsProperty);
         set => SetValue(PointsProperty, value);
+    }
+
+    public IReadOnlyList<TimelineEventSnapshot>? TimelineEvents
+    {
+        get => GetValue(TimelineEventsProperty);
+        set => SetValue(TimelineEventsProperty, value);
     }
 
     public HistoryMetric Metric
@@ -468,6 +742,14 @@ public sealed class TemperatureHistoryPreview : Decorator
         get => GetValue(HoverTimestampProperty);
         set => SetValue(HoverTimestampProperty, value);
     }
+
+    public HistoryZoomDomain? ZoomDomain
+    {
+        get => GetValue(ZoomDomainProperty);
+        set => SetValue(ZoomDomainProperty, value);
+    }
+
+    public void ResetZoom() => SetZoomDomain(null, notify: true);
 
     private Point TooltipPosition
     {
@@ -523,7 +805,13 @@ public sealed class TemperatureHistoryPreview : Decorator
         {
             ChartTooltipOverlay.SetPosition(_tooltip, TooltipPosition);
         }
+        else if (change.Property == ZoomDomainProperty)
+        {
+            RefreshTooltip();
+            InvalidateVisual();
+        }
         else if (change.Property == PointsProperty
+            || change.Property == TimelineEventsProperty
             || change.Property == MetricProperty
             || change.Property == DeviceFanMaximumRpmProperty
             || change.Property == HistoryWindowHoursProperty)
@@ -565,7 +853,7 @@ public sealed class TemperatureHistoryPreview : Decorator
             dark ? new SolidColorBrush(Color.FromRgb(80, 200, 120)) : new SolidColorBrush(Color.FromRgb(16, 124, 16)),
             "SystemFillColorSuccessBrush");
         var samples = GetSamples(plot);
-        var scaleSamples = Metric == HistoryMetric.Temperature ? _cachedAllSamples : samples;
+        var scaleSamples = _cachedAllSamples;
         var minimum = Metric == HistoryMetric.Temperature ? TemperatureLowerBound : 0;
         var maximum = Maximum(scaleSamples);
         var displayMaximum = maximum > 0 ? maximum : Metric == HistoryMetric.Power ? 20 : TemperatureFallbackUpperBound;
@@ -589,7 +877,8 @@ public sealed class TemperatureHistoryPreview : Decorator
             fanMaximum,
             firstTimestamp,
             lastTimestamp,
-            timestampSpan);
+            timestampSpan,
+            dark);
         DrawTooltipBlur(
             context,
             plot,
@@ -608,6 +897,29 @@ public sealed class TemperatureHistoryPreview : Decorator
             lastTimestamp,
             timestampSpan,
             dark);
+        DrawZoomSelection(context, plot, dark);
+    }
+
+    private void DrawZoomSelection(DrawingContext context, Rect plot, bool dark)
+    {
+        if (!_isSelecting)
+        {
+            return;
+        }
+
+        var left = Math.Clamp(Math.Min(_selectionStart.X, _selectionCurrent.X), plot.Left, plot.Right);
+        var right = Math.Clamp(Math.Max(_selectionStart.X, _selectionCurrent.X), plot.Left, plot.Right);
+        var selection = new Rect(left, plot.Top, Math.Max(0, right - left), plot.Height);
+        var fill = new SolidColorBrush(dark
+            ? Color.FromArgb(64, 120, 180, 255)
+            : Color.FromArgb(56, 0, 99, 177));
+        var stroke = new SolidColorBrush(dark
+            ? Color.FromArgb(150, 160, 205, 255)
+            : Color.FromArgb(130, 0, 99, 177));
+        using (context.PushClip(plot))
+        {
+            context.DrawRectangle(fill, new Pen(stroke, 1), selection);
+        }
     }
 
     private void DrawTooltipBlur(
@@ -657,7 +969,8 @@ public sealed class TemperatureHistoryPreview : Decorator
                 fanMaximum,
                 firstTimestamp,
                 lastTimestamp,
-                timestampSpan));
+                timestampSpan,
+                dark));
     }
 
     private void DrawChartScene(
@@ -676,7 +989,8 @@ public sealed class TemperatureHistoryPreview : Decorator
         double fanMaximum,
         long firstTimestamp,
         long lastTimestamp,
-        double timestampSpan)
+        double timestampSpan,
+        bool dark)
     {
         DrawGrid(context, plot, grid, secondary, minimum, displayMaximum, fanMaximum);
         DrawHeader(context, plot, primary, secondary, cpu, gpu, fan, fanMaximum);
@@ -698,6 +1012,30 @@ public sealed class TemperatureHistoryPreview : Decorator
         {
             DrawSeries(context, samples, plot, firstTimestamp, timestampSpan, minimum, displayMaximum, fanMaximum, cpu, gpu, fan);
 
+            if (Metric == HistoryMetric.Temperature && TimelineEvents is { Count: > 0 })
+            {
+                var timelineAccent = FindBrush(
+                    new SolidColorBrush(dark
+                        ? Color.FromRgb(120, 180, 255)
+                        : Color.FromRgb(0, 99, 177)),
+                    "AccentFillColorDefaultBrush", "SystemAccentColor");
+                var timelineCritical = new SolidColorBrush(dark
+                    ? Color.FromRgb(255, 110, 110)
+                    : Color.FromRgb(196, 43, 28));
+                var timelineResume = new SolidColorBrush(dark
+                    ? Color.FromRgb(205, 145, 255)
+                    : Color.FromRgb(124, 58, 237));
+                DrawTimelineMarkers(
+                    context,
+                    plot,
+                    firstTimestamp,
+                    lastTimestamp,
+                    timestampSpan,
+                    timelineAccent,
+                    timelineCritical,
+                    timelineResume);
+            }
+
             if (FindNearest(samples, HoverTimestamp) is { } hovered)
             {
                 var x = X(hovered.Timestamp, plot, firstTimestamp, timestampSpan);
@@ -706,11 +1044,267 @@ public sealed class TemperatureHistoryPreview : Decorator
         }
     }
 
-    private void OnPointerEntered(object? sender, PointerEventArgs e) => UpdateHover(e.GetPosition(this));
+    private void DrawTimelineMarkers(
+        DrawingContext context,
+        Rect plot,
+        long firstTimestamp,
+        long lastTimestamp,
+        double timestampSpan,
+        IBrush accent,
+        IBrush critical,
+        IBrush resume)
+    {
+        if (timestampSpan <= 0 || TimelineEvents is not { Count: > 0 } events)
+        {
+            return;
+        }
 
-    private void OnPointerMoved(object? sender, PointerEventArgs e) => UpdateHover(e.GetPosition(this));
+        var visible = TimelineEventLogic.SelectVisible(events, firstTimestamp, lastTimestamp);
+        var layout = TimelineEventLogic.Layout(visible, firstTimestamp, lastTimestamp);
+        foreach (var placement in layout)
+        {
+            var brush = placement.Event.Type switch
+            {
+                "disconnect" => critical,
+                "resume" => resume,
+                _ => accent,
+            };
+            var x = X(placement.Event.Timestamp, plot, firstTimestamp, timestampSpan);
+            context.DrawLine(
+                new Pen(brush, 1, DashStyle.Dash),
+                new Point(x, plot.Top),
+                new Point(x, plot.Bottom));
+            DrawTimelineLabel(
+                context,
+                brush,
+                TimelineLabel(placement.Event.LabelKey, placement.Event.Type),
+                plot,
+                x,
+                plot.Top + 1 + placement.Row * 12,
+                placement.AnchorEnd);
+        }
+    }
 
-    private void OnPointerExited(object? sender, PointerEventArgs e) => ClearHover();
+    private static void DrawTimelineLabel(
+        DrawingContext context,
+        IBrush brush,
+        string text,
+        Rect plot,
+        double markerX,
+        double y,
+        bool anchorEnd)
+    {
+        var formatted = new FormattedText(
+            text,
+            CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            new Typeface(FontFamily.Default),
+            10,
+            brush);
+        var x = ClampTimelineLabelX(markerX, formatted.Width, plot, anchorEnd);
+        context.DrawText(formatted, new Point(x, y));
+    }
+
+    private static double ClampTimelineLabelX(double markerX, double textWidth, Rect plot, bool anchorEnd)
+    {
+        const double inset = 4;
+        var candidate = anchorEnd ? markerX - textWidth - inset : markerX + inset;
+        var left = plot.Left + inset;
+        var right = Math.Max(left, plot.Right - textWidth - inset);
+        return Math.Clamp(candidate, left, right);
+    }
+
+    private static string TimelineLabel(string labelKey, string type) => labelKey switch
+    {
+        "fanCurve.history.timeline.deviceConnected" or "deviceConnected" => "Device connected",
+        "fanCurve.history.timeline.deviceDisconnected" or "deviceDisconnected" => "Device disconnected",
+        "fanCurve.history.timeline.smartControlOn" or "smartControlOn" => "Smart control on",
+        "fanCurve.history.timeline.smartControlOff" or "smartControlOff" => "Smart control off",
+        "fanCurve.history.timeline.curveSwitched" or "curveSwitched" => "Curve switched",
+        "fanCurve.history.timeline.resumeFromSleep" or "resumeFromSleep" => "Resumed from sleep",
+        "fanCurve.history.timeline.systemSuspended" or "systemSuspended" => "System suspended",
+        "fanCurve.history.timeline.coreStarted" or "coreStarted" => "Core started",
+        _ => type switch
+        {
+            "disconnect" => "Disconnected",
+            "resume" => "Resumed",
+            "profile" => "Curve switched",
+            "mode" => "Mode changed",
+            _ => "Event",
+        },
+    };
+
+    private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+            || !TryGetPlot(out var plot)
+            || !plot.Contains(e.GetPosition(this)))
+        {
+            return;
+        }
+
+        ClearHover();
+        _isSelecting = true;
+        _selectionStart = e.GetPosition(this);
+        _selectionCurrent = _selectionStart;
+        _selectionPointer = e.Pointer;
+        e.Pointer.Capture(this);
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
+    private void OnPointerEntered(object? sender, PointerEventArgs e)
+    {
+        if (!_isSelecting)
+        {
+            UpdateHover(e.GetPosition(this));
+        }
+    }
+
+    private void OnPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_isSelecting)
+        {
+            if (TryGetPlot(out var plot))
+            {
+                var point = e.GetPosition(this);
+                _selectionCurrent = new Point(Math.Clamp(point.X, plot.Left, plot.Right), point.Y);
+                InvalidateVisual();
+            }
+
+            return;
+        }
+
+        UpdateHover(e.GetPosition(this));
+    }
+
+    private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_isSelecting)
+        {
+            return;
+        }
+
+        EndSelection(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        if (!_isSelecting)
+        {
+            return;
+        }
+
+        _isSelecting = false;
+        _selectionStart = default;
+        _selectionCurrent = default;
+        _selectionPointer = null;
+        ClearHover();
+        InvalidateVisual();
+    }
+
+    private void OnDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (TryGetPlot(out var plot) && plot.Contains(e.GetPosition(this)))
+        {
+            CancelSelection();
+            ResetZoom();
+            e.Handled = true;
+        }
+    }
+
+    private void OnPointerExited(object? sender, PointerEventArgs e)
+    {
+        if (!_isSelecting)
+        {
+            ClearHover();
+        }
+    }
+
+    private void EndSelection(IPointer pointer)
+    {
+        var start = _selectionStart;
+        var end = _selectionCurrent;
+        _isSelecting = false;
+        _selectionStart = default;
+        _selectionCurrent = default;
+        _selectionPointer = null;
+        if (ReferenceEquals(pointer.Captured, this))
+        {
+            pointer.Capture(null);
+        }
+
+        if (TryGetPlot(out var plot))
+        {
+            var samples = GetSamples(plot);
+            var displayDomain = GetTimeDomain(samples);
+            var first = TimestampAtX(start.X, plot, displayDomain.Start, displayDomain.End);
+            var last = TimestampAtX(end.X, plot, displayDomain.Start, displayDomain.End);
+            var fullDomain = GetTimeDomain(_cachedAllSamples, Math.Clamp(HistoryWindowHours, 1, 24));
+            var selection = HistoryZoomLogic.Commit(
+                fullDomain.Start,
+                fullDomain.End,
+                first,
+                last,
+                _cachedAllSamples.Select(sample => sample.Timestamp));
+            if (selection.IsValid)
+            {
+                SetZoomDomain(selection.Domain, notify: true);
+            }
+        }
+
+        InvalidateVisual();
+    }
+
+    private void CancelSelection()
+    {
+        if (!_isSelecting)
+        {
+            return;
+        }
+
+        _isSelecting = false;
+        _selectionStart = default;
+        _selectionCurrent = default;
+        if (ReferenceEquals(_selectionPointer?.Captured, this))
+        {
+            _selectionPointer.Capture(null);
+        }
+
+        _selectionPointer = null;
+        InvalidateVisual();
+    }
+
+    private void SetZoomDomain(HistoryZoomDomain? domain, bool notify)
+    {
+        if (domain is { Start: var start, End: var end } && (start <= 0 || end <= start))
+        {
+            domain = null;
+        }
+
+        if (ZoomDomain == domain)
+        {
+            return;
+        }
+
+        SetCurrentValue(ZoomDomainProperty, domain);
+        if (notify)
+        {
+            ZoomChanged?.Invoke(this, new HistoryZoomChangedEventArgs(domain));
+        }
+    }
+
+    private static long TimestampAtX(double x, Rect plot, long start, long end)
+    {
+        if (end <= start || plot.Width <= 0)
+        {
+            return start;
+        }
+
+        var ratio = Math.Clamp((x - plot.Left) / plot.Width, 0, 1);
+        return start + (long)Math.Round((end - start) * ratio);
+    }
 
     private void UpdateHover(Point pointer)
     {
@@ -893,7 +1487,8 @@ public sealed class TemperatureHistoryPreview : Decorator
         var windowHours = Math.Clamp(HistoryWindowHours, 1, 24);
         if (ReferenceEquals(_cachedSource, Points)
             && _cachedMaximumPoints == maximumPoints
-            && _cachedWindowHours == windowHours)
+            && _cachedWindowHours == windowHours
+            && _cachedZoomDomain == ZoomDomain)
         {
             return _cachedSamples;
         }
@@ -916,12 +1511,34 @@ public sealed class TemperatureHistoryPreview : Decorator
         _cachedWindowHours = windowHours;
         _cachedAllSamples = samples;
         var (windowStart, windowEnd) = GetTimeDomain(samples, windowHours);
-        _cachedSamples = Bucketize(samples, windowStart, windowEnd, maximumPoints);
+        var (displayStart, displayEnd) = GetDisplayTimeDomain(windowStart, windowEnd);
+        var displaySamples = samples
+            .Where(sample => sample.Timestamp >= displayStart && sample.Timestamp <= displayEnd)
+            .ToList();
+        _cachedSamples = Bucketize(displaySamples, displayStart, displayEnd, maximumPoints);
+        _cachedZoomDomain = ZoomDomain;
         return _cachedSamples;
     }
 
-    private (long Start, long End) GetTimeDomain(IReadOnlyList<TemperatureHistoryPointSnapshot> samples) =>
-        GetTimeDomain(samples, Math.Clamp(HistoryWindowHours, 1, 24));
+    private (long Start, long End) GetTimeDomain(IReadOnlyList<TemperatureHistoryPointSnapshot> samples)
+    {
+        var fullDomain = GetTimeDomain(_cachedAllSamples, Math.Clamp(HistoryWindowHours, 1, 24));
+        return GetDisplayTimeDomain(fullDomain.Start, fullDomain.End);
+    }
+
+    private (long Start, long End) GetDisplayTimeDomain(long fullStart, long fullEnd)
+    {
+        if (ZoomDomain is not { } zoom
+            || zoom.Start < fullStart
+            || zoom.End > fullEnd
+            || zoom.End <= zoom.Start
+            || _cachedAllSamples.Count(sample => sample.Timestamp >= zoom.Start && sample.Timestamp <= zoom.End) < 2)
+        {
+            return (fullStart, fullEnd);
+        }
+
+        return (zoom.Start, zoom.End);
+    }
 
     private static (long Start, long End) GetTimeDomain(
         IReadOnlyList<TemperatureHistoryPointSnapshot> samples,
@@ -1410,11 +2027,15 @@ public sealed class TemperatureHistoryPreview : Decorator
         };
         var preview = new TemperatureHistoryPreview { Metric = HistoryMetric.Power };
         ChartTooltipMotion.SelfCheck();
+        HistoryZoomLogic.SelfCheck();
+        LearnedOffsetSummary.SelfCheck();
+        TimelineEventLogic.SelfCheck();
         ChartTooltipOverlay.SelfCheck();
         var axisLabelRight = AxisLabelRightEdge(new Rect(44, 30, 300, 200));
         var tempRange = TemperatureRange(temperaturePoints);
         var noTemperatureRange = TemperatureRange([]);
         var tempPlot = new Rect(44, 30, 300, 200);
+        var timelinePlot = new Rect(20, 30, 100, 100);
         var temperaturePreview = new TemperatureHistoryPreview { Metric = HistoryMetric.Temperature };
         var bucketed = Bucketize(
             new[]
@@ -1426,6 +2047,21 @@ public sealed class TemperatureHistoryPreview : Decorator
             10000,
             20000,
             10);
+        var cachePreview = new TemperatureHistoryPreview
+        {
+            Points = new[]
+            {
+                new TemperatureHistoryPointSnapshot { Timestamp = 10000, CpuTemp = 40 },
+                new TemperatureHistoryPointSnapshot { Timestamp = 20000, CpuTemp = 45 },
+                new TemperatureHistoryPointSnapshot { Timestamp = 30000, CpuTemp = 50 },
+                new TemperatureHistoryPointSnapshot { Timestamp = 40000, CpuTemp = 55 },
+            },
+            ZoomDomain = new HistoryZoomDomain(20000, 30000),
+        };
+        var cachePlot = new Rect(44, 30, 300, 200);
+        var zoomedSamples = cachePreview.GetSamples(cachePlot);
+        cachePreview.ZoomDomain = null;
+        var fullSamples = cachePreview.GetSamples(cachePlot);
         FanRatedRpm.SelfCheck();
         if (preview.Maximum(points) != 40 || FindNearest(points, 175)?.Timestamp != 200
             || axisLabelRight != 36 || RightAlignedX(axisLabelRight, 12) != 24 || RightAlignedX(axisLabelRight, 4) != 32
@@ -1451,7 +2087,11 @@ public sealed class TemperatureHistoryPreview : Decorator
             || HistoryBucketWidth(3_600_000, 1_000) != MinimumHistoryBucketMilliseconds
             || bucketed.Count != 2
             || bucketed[0].Timestamp != 12000
-            || bucketed[1].Timestamp != 16000)
+            || bucketed[1].Timestamp != 16000
+            || zoomedSamples.Count != 2
+            || fullSamples.Count != 4
+            || ClampTimelineLabelX(-10, 20, timelinePlot, false) != 24
+            || ClampTimelineLabelX(130, 20, timelinePlot, true) != 96)
         {
             throw new InvalidOperationException("History chart scale, fan axis, hover, and tooltip layout checks failed.");
         }

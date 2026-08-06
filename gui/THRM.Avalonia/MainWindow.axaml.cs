@@ -1,7 +1,10 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Animation;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
@@ -77,6 +80,57 @@ internal static class FanRatedRpm
         || string.Equals(model, "BS3", StringComparison.OrdinalIgnoreCase);
 }
 
+internal readonly record struct LearnedOffsetSummaryEntry(int Temperature, int Offset);
+
+internal static class LearnedOffsetSummary
+{
+    public const int MaximumEntries = 4;
+
+    public static IReadOnlyList<LearnedOffsetSummaryEntry> Build(
+        IReadOnlyList<FanCurvePoint> sourceCurve,
+        IReadOnlyList<int>? learnedOffsets,
+        string? learningBias)
+    {
+        return (learnedOffsets ?? [])
+            .Select((value, index) => (Offset: Constrain(value, learningBias), Index: index))
+            .Where(item => item.Offset != 0 && item.Index < sourceCurve.Count)
+            .OrderByDescending(item => Math.Abs(item.Offset))
+            .Take(MaximumEntries)
+            .Select(item => new LearnedOffsetSummaryEntry(sourceCurve[item.Index].Temperature, item.Offset))
+            .ToArray();
+    }
+
+    public static int Constrain(int offset, string? learningBias) => learningBias switch
+    {
+        "cooling" when offset < 0 => 0,
+        "quiet" when offset > 0 => 0,
+        _ => offset,
+    };
+
+    public static void SelfCheck()
+    {
+        var curve = new[]
+        {
+            new FanCurvePoint { Temperature = 30 },
+            new FanCurvePoint { Temperature = 40 },
+            new FanCurvePoint { Temperature = 50 },
+            new FanCurvePoint { Temperature = 60 },
+            new FanCurvePoint { Temperature = 70 },
+        };
+        var summary = Build(curve, [10, -250, 0, 40, 30, 500], "balanced");
+        var quiet = Build(curve, [10, -250, 0, 40], "quiet");
+        if (summary.Count != MaximumEntries
+            || summary[0] != new LearnedOffsetSummaryEntry(40, -250)
+            || summary[1] != new LearnedOffsetSummaryEntry(60, 40)
+            || summary[2] != new LearnedOffsetSummaryEntry(70, 30)
+            || summary[3] != new LearnedOffsetSummaryEntry(30, 10)
+            || quiet.Any(item => item.Offset > 0))
+        {
+            throw new InvalidOperationException("Learned offset summary check failed.");
+        }
+    }
+}
+
 public partial class MainWindow : Window
 {
     private readonly ThrmIpcClient _ipc = new();
@@ -101,12 +155,14 @@ public partial class MainWindow : Window
     private readonly List<FanCurvePoint> _fanCurve = [];
     private readonly List<FanCurveProfileSnapshot> _fanCurveProfiles = [];
     private string? _activeFanCurveProfileId;
+    private TimeCurveScheduleSnapshot _timeCurveSchedule = new();
     private bool _fanCurveKnown;
     private bool _fanCurveLoading;
     private bool _fanCurveLearningEnabled;
     private string _fanCurveLearningBias = "balanced";
     private readonly List<int> _learnedFanCurveOffsets = [];
     private readonly List<TemperatureHistoryPointSnapshot> _temperatureHistory = [];
+    private readonly List<TimelineEventSnapshot> _timelineEvents = [];
     private bool _temperatureHistoryKnown;
     private bool _temperatureHistoryLoading;
     private bool _temperatureHistoryEnabled;
@@ -118,6 +174,18 @@ public partial class MainWindow : Window
     private static readonly string[] ManualLevelValues = ["低", "中", "高"];
     private static readonly string[] SmartStartStopValues = ["off", "immediate", "delayed"];
     private static readonly int[] TemperatureHistoryRetentionOptions = [1, 2, 3, 6, 12, 24];
+    private static readonly (int Value, string Label)[] TimeCurveScheduleWeekdays =
+    [
+        (1, "Mon"),
+        (2, "Tue"),
+        (3, "Wed"),
+        (4, "Thu"),
+        (5, "Fri"),
+        (6, "Sat"),
+        (0, "Sun"),
+    ];
+
+    private readonly record struct ScheduleDayTag(string RuleId, int Day);
 
     public MainWindow()
     {
@@ -135,6 +203,8 @@ public partial class MainWindow : Window
         FanCurvePreview.PointDragged += FanCurvePreviewPointDragged;
         TemperatureHistoryPreview.HoverChanged += HistoryPreviewHoverChanged;
         PowerHistoryPreview.HoverChanged += HistoryPreviewHoverChanged;
+        TemperatureHistoryPreview.ZoomChanged += HistoryPreviewZoomChanged;
+        PowerHistoryPreview.ZoomChanged += HistoryPreviewZoomChanged;
         Opened += WindowOpened;
         Closing += WindowClosing;
     }
@@ -290,6 +360,16 @@ public partial class MainWindow : Window
                 if (e.TryGetData<TemperatureHistoryPointSnapshot>(out var historyPoint) && historyPoint is not null)
                 {
                     Dispatcher.UIThread.Post(() => AppendTemperatureHistoryPoint(historyPoint));
+                }
+                break;
+            case "timeline-event":
+                if (e.TryGetData<TimelineEventSnapshot>(out var timelineEvent) && timelineEvent is not null)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        MergeTimelineEvents([timelineEvent]);
+                        UpdateTemperatureHistoryPreviews();
+                    });
                 }
                 break;
             case "device-connected":
@@ -881,6 +961,7 @@ public partial class MainWindow : Window
             _smartStartStop = SmartStartStopValues.Contains(config.SmartStartStop) ? config.SmartStartStop! : "off";
             _fanCurveLearningEnabled = config.SmartControl?.Learning == true;
             _fanCurveLearningBias = config.SmartControl?.LearningBias ?? "balanced";
+            _timeCurveSchedule = CloneTimeCurveSchedule(config.TimeCurveSchedule);
             _learnedFanCurveOffsets.Clear();
             _learnedFanCurveOffsets.AddRange(config.SmartControl?.LearnedOffsets ?? []);
             if (!string.IsNullOrWhiteSpace(config.ManualGear))
@@ -903,6 +984,7 @@ public partial class MainWindow : Window
             SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
             UpdateManualAppliedText();
             UpdateFanCurvePreview();
+            ApplyTimeCurveScheduleControls();
         }
         finally
         {
@@ -1007,6 +1089,9 @@ public partial class MainWindow : Window
         ResetLearnedOffsetsButton.IsEnabled = canEditFanCurve;
         ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurve.Count >= 2;
         FanCurvePreview.IsEditable = canEditFanCurve;
+        TimeCurveScheduleEnabledSwitch.IsEnabled = canEditFanCurve;
+        AddTimeCurveScheduleRuleButton.IsEnabled = canEditFanCurve && _fanCurveProfiles.Count > 0;
+        TimeCurveScheduleRulesPanel.IsEnabled = canEditFanCurve;
 
         var canManageTemperatureHistory = _ipc.IsConnected
             && _temperatureHistoryKnown
@@ -1091,6 +1176,7 @@ public partial class MainWindow : Window
             _temperatureHistory.AddRange(history.Points.OrderBy(point => point.Timestamp));
             _temperatureHistoryEnabled = history.Enabled;
             _temperatureHistoryRetentionHours = Math.Clamp(history.RetentionHours, 1, 24);
+            MergeTimelineEvents(history.Events);
             _temperatureHistoryKnown = true;
             TemperatureHistoryEnabledSwitch.IsChecked = _temperatureHistoryEnabled;
             SelectTemperatureHistoryRetention();
@@ -1102,6 +1188,26 @@ public partial class MainWindow : Window
         {
             _updatingTemperatureHistoryControls = false;
         }
+    }
+
+    private void MergeTimelineEvents(IEnumerable<TimelineEventSnapshot>? incoming)
+    {
+        var merged = TimelineEventLogic.Merge(_timelineEvents, incoming);
+        _timelineEvents.Clear();
+        _timelineEvents.AddRange(merged);
+        TrimTimelineEvents();
+    }
+
+    private void TrimTimelineEvents()
+    {
+        if (_temperatureHistory.Count == 0)
+        {
+            return;
+        }
+
+        var newestTimestamp = _temperatureHistory[^1].Timestamp;
+        var cutoff = newestTimestamp - (long)TimeSpan.FromHours(_temperatureHistoryRetentionHours).TotalMilliseconds;
+        _timelineEvents.RemoveAll(item => item.Timestamp < cutoff);
     }
 
     private void AppendTemperatureHistoryPoint(TemperatureHistoryPointSnapshot point)
@@ -1133,6 +1239,7 @@ public partial class MainWindow : Window
             _temperatureHistory.RemoveAt(0);
         }
 
+        TrimTimelineEvents();
         UpdateTemperatureHistoryPreviews();
         UpdateTemperatureHistorySummary();
         UpdateTemperatureHistoryStateText();
@@ -1164,6 +1271,7 @@ public partial class MainWindow : Window
         TemperatureHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
         PowerHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
         TemperatureHistoryPreview.DeviceFanMaximumRpm = _deviceFanMaximumRpm;
+        TemperatureHistoryPreview.TimelineEvents = _timelineEvents.ToArray();
         TemperatureHistoryPreview.Points = points;
         PowerHistoryPreview.Points = points;
     }
@@ -1179,6 +1287,12 @@ public partial class MainWindow : Window
         {
             PowerHistoryPreview.SetLinkedHover(e.Timestamp, e.PointerRatio);
         }
+    }
+
+    private void HistoryPreviewZoomChanged(object? sender, HistoryZoomChangedEventArgs e)
+    {
+        TemperatureHistoryPreview.ZoomDomain = e.Domain;
+        PowerHistoryPreview.ZoomDomain = e.Domain;
     }
 
     private void UpdateTemperatureHistoryStateText()
@@ -1242,11 +1356,405 @@ public partial class MainWindow : Window
             }));
 
             UpdateFanCurvePreview();
+            ApplyTimeCurveScheduleControls();
         }
         finally
         {
             _fanCurveLoading = false;
         }
+    }
+
+    private void ApplyTimeCurveScheduleControls()
+    {
+        TimeCurveScheduleEnabledSwitch.IsChecked = _timeCurveSchedule.Enabled;
+        TimeCurveScheduleStateText.Text = !_ipc.IsConnected
+            ? "Waiting for THRM Core."
+            : _timeCurveSchedule.Rules.Count == 0
+                ? "Add a rule to let THRM Core switch profiles automatically."
+                : _timeCurveSchedule.Enabled
+                    ? "Core will apply the first matching rule automatically."
+                    : "Schedule is off; rules are saved but not applied.";
+
+        TimeCurveScheduleRulesPanel.Children.Clear();
+        foreach (var rule in _timeCurveSchedule.Rules)
+        {
+            TimeCurveScheduleRulesPanel.Children.Add(BuildTimeCurveScheduleRuleItem(rule));
+        }
+
+        var canEdit = CanEditFanCurve;
+        TimeCurveScheduleEnabledSwitch.IsEnabled = canEdit;
+        AddTimeCurveScheduleRuleButton.IsEnabled = canEdit && _fanCurveProfiles.Count > 0;
+        TimeCurveScheduleRulesPanel.IsEnabled = canEdit;
+    }
+
+    private FASettingsExpanderItem BuildTimeCurveScheduleRuleItem(TimeCurveScheduleRuleSnapshot rule)
+    {
+        var nameBox = new TextBox
+        {
+            Text = rule.Name,
+            Width = 150,
+            MaxLength = 40,
+        };
+        AutomationProperties.SetName(nameBox, $"Schedule rule name for {rule.Name}");
+        nameBox.LostFocus += (_, _) => _ = CommitTimeCurveScheduleNameAsync(rule.Id, nameBox);
+
+        var profileBox = new FAComboBox
+        {
+            Width = 170,
+            ItemsSource = _fanCurveProfiles.ToArray(),
+            SelectedItem = _fanCurveProfiles.FirstOrDefault(profile =>
+                string.Equals(profile.Id, rule.CurveProfileId, StringComparison.Ordinal)),
+        };
+        AutomationProperties.SetName(profileBox, $"Curve profile for {rule.Name}");
+        profileBox.SelectionChanged += (_, _) => _ = SaveTimeCurveScheduleProfileAsync(rule.Id, profileBox);
+
+        var startPicker = CreateScheduleTimePicker(rule, rule.StartTime, "Start time");
+        var endPicker = CreateScheduleTimePicker(rule, rule.EndTime, "End time");
+        startPicker.SelectedTimeChanged += (_, _) => _ = SaveTimeCurveScheduleTimeAsync(rule.Id, "startTime", startPicker);
+        endPicker.SelectedTimeChanged += (_, _) => _ = SaveTimeCurveScheduleTimeAsync(rule.Id, "endTime", endPicker);
+
+        var fields = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 8,
+            LineSpacing = 8,
+            Children =
+            {
+                CreateScheduleField("Name", nameBox),
+                CreateScheduleField("Curve profile", profileBox),
+                CreateScheduleField("Start", startPicker),
+                CreateScheduleField("End", endPicker),
+            },
+        };
+
+        var enabledSwitch = new ToggleSwitch { IsChecked = rule.Enabled };
+        AutomationProperties.SetName(enabledSwitch, $"Enable {rule.Name}");
+        enabledSwitch.Click += (_, _) => _ = SaveTimeCurveScheduleRuleEnabledAsync(rule.Id, enabledSwitch);
+
+        var deleteButton = new Button { Content = "Delete" };
+        AutomationProperties.SetName(deleteButton, $"Delete {rule.Name}");
+        deleteButton.Click += (_, _) => _ = DeleteTimeCurveScheduleRuleAsync(rule.Id);
+
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Children =
+            {
+                new TextBlock { Text = "Enabled", VerticalAlignment = VerticalAlignment.Center },
+                enabledSwitch,
+                deleteButton,
+            },
+        };
+
+        var weekdays = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 6,
+            LineSpacing = 6,
+        };
+        weekdays.Children.Add(new TextBlock
+        {
+            Text = "Days",
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var selectedDays = NormalizeScheduleWeekdays(rule.Weekdays);
+        foreach (var (day, label) in TimeCurveScheduleWeekdays)
+        {
+            var toggle = new ToggleButton
+            {
+                Content = label,
+                IsChecked = selectedDays.Contains(day),
+                MinWidth = 34,
+                Tag = new ScheduleDayTag(rule.Id, day),
+            };
+            AutomationProperties.SetName(toggle, $"{label} for {rule.Name}");
+            toggle.Click += ScheduleWeekdayClick;
+            weekdays.Children.Add(toggle);
+        }
+
+        var body = new StackPanel
+        {
+            Spacing = 10,
+            Children =
+            {
+                fields,
+                actions,
+                weekdays,
+            },
+        };
+
+        return new FASettingsExpanderItem
+        {
+            Content = rule.Name,
+            Description = $"{rule.StartTime}–{rule.EndTime}",
+            Footer = body,
+            IsEnabled = CanEditFanCurve,
+        };
+    }
+
+    private static StackPanel CreateScheduleField(string label, Control control) => new()
+    {
+        Spacing = 4,
+        Children =
+        {
+            new TextBlock { Text = label, FontSize = 11 },
+            control,
+        },
+    };
+
+    private static TimePicker CreateScheduleTimePicker(
+        TimeCurveScheduleRuleSnapshot rule,
+        string value,
+        string label)
+    {
+        var picker = new TimePicker
+        {
+            Width = 108,
+            SelectedTime = ParseScheduleTime(value),
+            MinuteIncrement = 15,
+            ClockIdentifier = "24HourClock",
+            UseSeconds = false,
+        };
+        AutomationProperties.SetName(picker, $"{label} for {rule.Name}");
+        return picker;
+    }
+
+    private async void TimeCurveScheduleEnabledClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingConfigControls || !CanEditFanCurve)
+        {
+            TimeCurveScheduleEnabledSwitch.IsChecked = _timeCurveSchedule.Enabled;
+            return;
+        }
+
+        var next = CloneTimeCurveSchedule(_timeCurveSchedule);
+        next = new TimeCurveScheduleSnapshot
+        {
+            Enabled = TimeCurveScheduleEnabledSwitch.IsChecked == true,
+            Rules = next.Rules,
+        };
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async void AddTimeCurveScheduleRuleClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanEditFanCurve || _fanCurveProfiles.Count == 0)
+        {
+            return;
+        }
+
+        var profileId = _activeFanCurveProfileId ?? _fanCurveProfiles[0].Id;
+        var next = CloneTimeCurveSchedule(_timeCurveSchedule);
+        next.Rules.Add(new TimeCurveScheduleRuleSnapshot
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Name = $"Rule {next.Rules.Count + 1}",
+            Enabled = true,
+            Weekdays = [1, 2, 3, 4, 5, 6, 0],
+            StartTime = "22:00",
+            EndTime = "06:00",
+            CurveProfileId = profileId,
+        });
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async Task CommitTimeCurveScheduleNameAsync(string ruleId, TextBox nameBox)
+    {
+        if (_updatingConfigControls || !CanEditFanCurve)
+        {
+            return;
+        }
+
+        var current = _timeCurveSchedule.Rules.FirstOrDefault(rule => rule.Id == ruleId);
+        if (current is null)
+        {
+            return;
+        }
+
+        var name = nameBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(name) || string.Equals(name, current.Name, StringComparison.Ordinal))
+        {
+            nameBox.Text = current.Name;
+            return;
+        }
+
+        var next = UpdateTimeCurveScheduleRule(ruleId, rule => CloneTimeCurveScheduleRule(rule, name: name));
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async Task SaveTimeCurveScheduleProfileAsync(string ruleId, FAComboBox profileBox)
+    {
+        if (_updatingConfigControls || !CanEditFanCurve)
+        {
+            return;
+        }
+
+        if (profileBox.SelectedItem is not FanCurveProfileSnapshot profile)
+        {
+            ApplyTimeCurveScheduleControls();
+            return;
+        }
+
+        var next = UpdateTimeCurveScheduleRule(ruleId, rule => CloneTimeCurveScheduleRule(rule, curveProfileId: profile.Id));
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async Task SaveTimeCurveScheduleTimeAsync(string ruleId, string field, TimePicker picker)
+    {
+        if (_updatingConfigControls || !CanEditFanCurve || picker.SelectedTime is null)
+        {
+            return;
+        }
+
+        var next = UpdateTimeCurveScheduleRule(
+            ruleId,
+            rule => field == "startTime"
+                ? CloneTimeCurveScheduleRule(rule, startTime: FormatScheduleTime(picker.SelectedTime))
+                : CloneTimeCurveScheduleRule(rule, endTime: FormatScheduleTime(picker.SelectedTime)));
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async Task SaveTimeCurveScheduleRuleEnabledAsync(string ruleId, ToggleSwitch enabledSwitch)
+    {
+        if (_updatingConfigControls || !CanEditFanCurve)
+        {
+            return;
+        }
+
+        var next = UpdateTimeCurveScheduleRule(ruleId, rule => CloneTimeCurveScheduleRule(
+            rule,
+            enabled: enabledSwitch.IsChecked == true));
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async void ScheduleWeekdayClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton toggle || toggle.Tag is not ScheduleDayTag tag)
+        {
+            return;
+        }
+
+        if (_updatingConfigControls || !CanEditFanCurve)
+        {
+            ApplyTimeCurveScheduleControls();
+            return;
+        }
+
+        var current = _timeCurveSchedule.Rules.FirstOrDefault(rule => rule.Id == tag.RuleId);
+        if (current is null)
+        {
+            return;
+        }
+
+        var days = NormalizeScheduleWeekdays(current.Weekdays);
+        if (toggle.IsChecked != true && days.Count <= 1)
+        {
+            toggle.IsChecked = true;
+            SetActivity("Keep at least one weekday selected.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (toggle.IsChecked == true)
+        {
+            if (!days.Contains(tag.Day))
+            {
+                days.Add(tag.Day);
+            }
+        }
+        else
+        {
+            days.Remove(tag.Day);
+        }
+
+        days.Sort();
+        var next = UpdateTimeCurveScheduleRule(tag.RuleId, rule => CloneTimeCurveScheduleRule(rule, weekdays: days));
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async Task DeleteTimeCurveScheduleRuleAsync(string ruleId)
+    {
+        if (!CanEditFanCurve)
+        {
+            return;
+        }
+
+        var next = CloneTimeCurveSchedule(_timeCurveSchedule);
+        next.Rules.RemoveAll(rule => rule.Id == ruleId);
+        await SaveTimeCurveScheduleAsync(next);
+    }
+
+    private async Task<bool> SaveTimeCurveScheduleAsync(TimeCurveScheduleSnapshot schedule)
+    {
+        var saved = await RunWriteAsync(
+            "Save time curve schedule",
+            () => _ipc.SetTimeCurveScheduleAsync(schedule, _lifetime.Token));
+        if (!saved)
+        {
+            ApplyTimeCurveScheduleControls();
+            return false;
+        }
+
+        await RefreshFanCurveAsync();
+        return true;
+    }
+
+    private TimeCurveScheduleSnapshot UpdateTimeCurveScheduleRule(
+        string ruleId,
+        Func<TimeCurveScheduleRuleSnapshot, TimeCurveScheduleRuleSnapshot> update)
+    {
+        var next = CloneTimeCurveSchedule(_timeCurveSchedule);
+        var index = next.Rules.FindIndex(rule => rule.Id == ruleId);
+        if (index >= 0)
+        {
+            next.Rules[index] = update(next.Rules[index]);
+        }
+
+        return next;
+    }
+
+    private static TimeCurveScheduleSnapshot CloneTimeCurveSchedule(TimeCurveScheduleSnapshot? schedule) => new()
+    {
+        Enabled = schedule?.Enabled == true,
+        Rules = schedule?.Rules.Select(rule => CloneTimeCurveScheduleRule(rule)).ToList() ?? [],
+    };
+
+    private static TimeCurveScheduleRuleSnapshot CloneTimeCurveScheduleRule(
+        TimeCurveScheduleRuleSnapshot rule,
+        string? name = null,
+        bool? enabled = null,
+        IReadOnlyList<int>? weekdays = null,
+        string? startTime = null,
+        string? endTime = null,
+        string? curveProfileId = null) => new()
+    {
+        Id = rule.Id,
+        Name = name ?? rule.Name,
+        Enabled = enabled ?? rule.Enabled,
+        Weekdays = (weekdays ?? rule.Weekdays).Distinct().OrderBy(day => day).ToList(),
+        StartTime = startTime ?? rule.StartTime,
+        EndTime = endTime ?? rule.EndTime,
+        CurveProfileId = curveProfileId ?? rule.CurveProfileId,
+    };
+
+    private static List<int> NormalizeScheduleWeekdays(IEnumerable<int>? weekdays)
+    {
+        var normalized = weekdays?.Where(day => day is >= 0 and <= 6).Distinct().OrderBy(day => day).ToList() ?? [];
+        return normalized.Count > 0 ? normalized : [0, 1, 2, 3, 4, 5, 6];
+    }
+
+    private static TimeSpan ParseScheduleTime(string? value) =>
+        TimeSpan.TryParseExact(value, [@"hh\:mm", @"h\:mm"], CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= TimeSpan.Zero
+            && parsed < TimeSpan.FromDays(1)
+            ? parsed
+            : TimeSpan.Zero;
+
+    private static string FormatScheduleTime(TimeSpan? value)
+    {
+        var minutes = Math.Clamp((int)(value?.TotalMinutes ?? 0), 0, 23 * 60 + 59);
+        return $"{minutes / 60:D2}:{minutes % 60:D2}";
     }
 
     private void FanCurvePreviewPointDragged(object? sender, FanCurvePointDragEventArgs e)
@@ -1266,6 +1774,25 @@ public partial class MainWindow : Window
     {
         FanCurvePreview.Points = _fanCurve.ToArray();
         FanCurvePreview.LearnedPoints = BuildLearnedFanCurve();
+        UpdateLearnedOffsetSummary();
+    }
+
+    private void UpdateLearnedOffsetSummary()
+    {
+        var summary = LearnedOffsetSummary.Build(_fanCurve, _learnedFanCurveOffsets, _fanCurveLearningBias);
+        LearnedOffsetsSummaryPanel.Children.Clear();
+        LearnedOffsetsSummaryText.Text = summary.Count == 0
+            ? "No learned offsets for the active curve."
+            : "Largest active corrections:";
+
+        foreach (var entry in summary)
+        {
+            LearnedOffsetsSummaryPanel.Children.Add(new TextBlock
+            {
+                Text = $"{entry.Temperature} °C  {entry.Offset:+#;-#;0} RPM",
+                FontWeight = FontWeight.SemiBold,
+            });
+        }
     }
 
     private IReadOnlyList<FanCurvePoint>? BuildLearnedFanCurve()
@@ -1291,12 +1818,7 @@ public partial class MainWindow : Window
         }).ToArray();
     }
 
-    private int ConstrainLearnedOffset(int offset) => _fanCurveLearningBias switch
-    {
-        "cooling" when offset < 0 => 0,
-        "quiet" when offset > 0 => 0,
-        _ => offset,
-    };
+    private int ConstrainLearnedOffset(int offset) => LearnedOffsetSummary.Constrain(offset, _fanCurveLearningBias);
 
     private bool CanEditFanCurve =>
         _ipc.IsConnected && _fanCurveKnown && !_fanCurveLoading && !_writeInProgress;

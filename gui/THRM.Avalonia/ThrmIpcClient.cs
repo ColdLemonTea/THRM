@@ -174,6 +174,11 @@ public sealed class ThrmIpcClient : IDisposable
     public Task<FanCurveProfileSnapshot> SetActiveFanCurveProfileAsync(string id, CancellationToken cancellationToken = default) =>
         SendRequestAsync<FanCurveProfileSnapshot>("SetActiveFanCurveProfile", new { id }, cancellationToken);
 
+    public Task<bool> SetTimeCurveScheduleAsync(
+        TimeCurveScheduleSnapshot schedule,
+        CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetTimeCurveSchedule", schedule, cancellationToken);
+
     public Task<FanCurveProfileSnapshot> SaveFanCurveProfileAsync(
         string id,
         string name,
@@ -610,6 +615,7 @@ public sealed class ConfigSnapshot
     [JsonPropertyName("powerOnStart")] public bool PowerOnStart { get; init; }
     [JsonPropertyName("smartStartStop")] public string? SmartStartStop { get; init; }
     [JsonPropertyName("smartControl")] public SmartControlSnapshot? SmartControl { get; init; }
+    [JsonPropertyName("timeCurveSchedule")] public TimeCurveScheduleSnapshot? TimeCurveSchedule { get; init; }
 }
 
 public sealed class SmartControlSnapshot
@@ -617,6 +623,23 @@ public sealed class SmartControlSnapshot
     [JsonPropertyName("learning")] public bool Learning { get; init; }
     [JsonPropertyName("learningBias")] public string? LearningBias { get; init; }
     [JsonPropertyName("learnedOffsets")] public List<int> LearnedOffsets { get; init; } = [];
+}
+
+public sealed class TimeCurveScheduleSnapshot
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; init; }
+    [JsonPropertyName("rules")] public List<TimeCurveScheduleRuleSnapshot> Rules { get; init; } = [];
+}
+
+public sealed class TimeCurveScheduleRuleSnapshot
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = string.Empty;
+    [JsonPropertyName("name")] public string Name { get; init; } = string.Empty;
+    [JsonPropertyName("enabled")] public bool Enabled { get; init; }
+    [JsonPropertyName("weekdays")] public List<int> Weekdays { get; init; } = [];
+    [JsonPropertyName("startTime")] public string StartTime { get; init; } = "00:00";
+    [JsonPropertyName("endTime")] public string EndTime { get; init; } = "23:59";
+    [JsonPropertyName("curveProfileId")] public string CurveProfileId { get; init; } = string.Empty;
 }
 
 public sealed class DeviceStatusSnapshot
@@ -867,6 +890,36 @@ internal static class IpcProtocolSelfCheck
             || temperatureHistoryRetentionData.GetProperty("value").GetInt32() != 12)
         {
             throw new InvalidOperationException("SetTemperatureHistoryRetentionHours request check failed.");
+        }
+
+        var schedule = new TimeCurveScheduleSnapshot
+        {
+            Enabled = true,
+            Rules =
+            [
+                new TimeCurveScheduleRuleSnapshot
+                {
+                    Id = "schedule-1",
+                    Name = "Quiet hours",
+                    Enabled = true,
+                    Weekdays = [1, 2, 3, 4, 5],
+                    StartTime = "22:00",
+                    EndTime = "06:00",
+                    CurveProfileId = "quiet",
+                },
+            ],
+        };
+        using var timeCurveScheduleRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetTimeCurveSchedule", schedule, "self-check-time-curve-schedule"));
+        var timeCurveScheduleData = timeCurveScheduleRequest.RootElement.GetProperty("data");
+        var decodedSchedule = timeCurveScheduleData.Deserialize<TimeCurveScheduleSnapshot>(ThrmIpcClient.JsonOptions);
+        if (timeCurveScheduleRequest.RootElement.GetProperty("type").GetString() != "SetTimeCurveSchedule"
+            || decodedSchedule is not { Enabled: true }
+            || decodedSchedule.Rules.Count != 1
+            || decodedSchedule.Rules[0].StartTime != "22:00"
+            || !decodedSchedule.Rules[0].Weekdays.SequenceEqual(new[] { 1, 2, 3, 4, 5 }))
+        {
+            throw new InvalidOperationException("SetTimeCurveSchedule request/decoding check failed.");
         }
 
         var response = JsonSerializer.Deserialize<IpcMessage>(

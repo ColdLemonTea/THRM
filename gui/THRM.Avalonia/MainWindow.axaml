@@ -426,6 +426,45 @@
                 </ui:FASettingsExpander.Footer>
               </ui:FASettingsExpander>
 
+              <ui:FASettingsExpander x:Name="TimeCurveScheduleExpander"
+                                     Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Time curve schedule"
+                                     Description="Let THRM Core switch curve profiles automatically by time and weekday."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="History" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Automatic switching"
+                                           Description="Core applies the first enabled rule that matches the current time.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid ColumnDefinitions="*,Auto,Auto"
+                          ColumnSpacing="8">
+                      <TextBlock x:Name="TimeCurveScheduleStateText"
+                                 VerticalAlignment="Center"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 Text="Waiting for THRM Core."
+                                 TextWrapping="Wrap" />
+                      <Button x:Name="AddTimeCurveScheduleRuleButton"
+                              Grid.Column="1"
+                              Content="Add rule"
+                              Click="AddTimeCurveScheduleRuleClick"
+                              IsEnabled="False" />
+                      <ToggleSwitch x:Name="TimeCurveScheduleEnabledSwitch"
+                                    Grid.Column="2"
+                                    IsEnabled="False"
+                                    Click="TimeCurveScheduleEnabledClick" />
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Rules"
+                                           Description="Choose a profile, time window, and Monday–Sunday coverage for each rule.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel x:Name="TimeCurveScheduleRulesPanel"
+                                Spacing="8" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Curve learning"
                                      Description="Manage the adaptive speed offsets learned by THRM Core."
@@ -433,6 +472,21 @@
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="BrainCircuit" />
                 </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Learned offsets"
+                                           Description="Largest active corrections from the current base curve.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Spacing="6">
+                      <TextBlock x:Name="LearnedOffsetsSummaryText"
+                                 Text="No learned offsets for the active curve."
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap" />
+                      <WrapPanel x:Name="LearnedOffsetsSummaryPanel"
+                                 Orientation="Horizontal"
+                                 ItemSpacing="12"
+                                 LineSpacing="6" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Reset learned offsets"
                                            Description="Forget adaptive RPM corrections. The base fan curve is unchanged.">
                   <ui:FASettingsExpanderItem.Footer>
@@ -504,9 +558,17 @@
                 </ui:FASettingsExpander.IconSource>
                 <ui:FASettingsExpanderItem Content="Recent trend"
                                            Description="Samples are shown in chronological order from the selected retention window.">
-                  <local:TemperatureHistoryPreview x:Name="TemperatureHistoryPreview"
-                                                   Height="260"
-                                                   HorizontalAlignment="Stretch" />
+                  <StackPanel Spacing="8"
+                              HorizontalAlignment="Stretch">
+                    <local:TemperatureHistoryPreview x:Name="TemperatureHistoryPreview"
+                                                     Height="260"
+                                                     HorizontalAlignment="Stretch" />
+                    <TextBlock Margin="0,8,0,0"
+                               Text="Drag across either chart to zoom; double-click to reset."
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               HorizontalAlignment="Stretch" />
+                  </StackPanel>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Power history"
                                            Description="Hover either chart to inspect the same recorded time.">

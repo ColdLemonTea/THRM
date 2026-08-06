@@ -96,6 +96,16 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) ipc.Response {
 		}
 		return a.dataResponse(profile)
 
+	case ipc.ReqSetTimeCurveSchedule:
+		var schedule types.TimeCurveScheduleConfig
+		if err := json.Unmarshal(req.Data, &schedule); err != nil {
+			return a.errorResponse("解析分时曲线计划失败: " + err.Error())
+		}
+		if err := a.SetTimeCurveSchedule(schedule); err != nil {
+			return a.errorResponse(err.Error())
+		}
+		return a.successResponse(true)
+
 	case ipc.ReqSaveFanCurveProfile:
 		var params ipc.SaveFanCurveProfileParams
 		if err := json.Unmarshal(req.Data, &params); err != nil {
