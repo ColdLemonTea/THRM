@@ -1,8 +1,10 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
 using FluentIcons.Avalonia.Fluent;
 using FluentAvalonia.UI.Controls;
@@ -406,6 +408,40 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void RenameFanCurveProfileClick(object? sender, RoutedEventArgs e)
+    {
+        var profile = ActiveFanCurveProfile();
+        var name = FanCurveProfileNameTextBox.Text?.Trim();
+        if (profile is null || string.IsNullOrEmpty(name))
+        {
+            SetActivity("Choose an active profile and enter a name before renaming.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (string.Equals(profile.Name, name, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        FanCurveProfileSnapshot? renamed = null;
+        if (await RunWriteAsync(
+                "Rename fan curve profile",
+                async () =>
+                {
+                    renamed = await _ipc.SaveFanCurveProfileAsync(
+                        profile.Id,
+                        name,
+                        profile.Curve,
+                        false,
+                        _lifetime.Token);
+                    return true;
+                })
+            && renamed is not null)
+        {
+            ReplaceFanCurveProfile(renamed);
+        }
+    }
+
     private async void SaveFanCurveProfileClick(object? sender, RoutedEventArgs e)
     {
         var name = NewFanCurveProfileNameTextBox.Text?.Trim();
@@ -430,6 +466,103 @@ public partial class MainWindow : Window
                 }))
         {
             NewFanCurveProfileNameTextBox.Text = string.Empty;
+            await RefreshFanCurveAsync();
+        }
+    }
+
+    private async void ExportFanCurveProfilesClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanEditFanCurve)
+        {
+            SetActivity("Export unavailable until the active curve is synchronized.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        try
+        {
+            var code = await _ipc.ExportFanCurveProfilesAsync(_lifetime.Token);
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null)
+            {
+                throw new InvalidOperationException("The system clipboard is unavailable.");
+            }
+
+            await clipboard.SetTextAsync(code);
+            SetActivity("Saved fan curve profiles copied to the clipboard.", FAInfoBarSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            SetActivity($"Export fan curve profiles failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+    }
+
+    private async void ImportFanCurveProfilesClick(object? sender, RoutedEventArgs e)
+    {
+        var code = FanCurveProfileImportCodeTextBox.Text?.Trim();
+        if (string.IsNullOrEmpty(code))
+        {
+            SetActivity("Paste a profile code before importing.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (await RunWriteAsync(
+                "Import fan curve profiles",
+                () => _ipc.ImportFanCurveProfilesAsync(code, _lifetime.Token)))
+        {
+            FanCurveProfileImportCodeTextBox.Text = string.Empty;
+            await RefreshFanCurveAsync();
+        }
+    }
+
+    private async void DeleteFanCurveProfileClick(object? sender, RoutedEventArgs e)
+    {
+        var profile = ActiveFanCurveProfile();
+        if (profile is null)
+        {
+            SetActivity("Choose an active profile before deleting.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (_fanCurveProfiles.Count <= 1)
+        {
+            SetActivity("At least one fan curve profile must remain.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!await ConfirmActionAsync(
+                "Delete active profile?",
+                $"Delete “{profile.Name}”? This cannot be undone.",
+                "Delete"))
+        {
+            return;
+        }
+
+        if (await RunWriteAsync(
+                "Delete fan curve profile",
+                () => _ipc.DeleteFanCurveProfileAsync(profile.Id, _lifetime.Token)))
+        {
+            await RefreshFanCurveAsync();
+        }
+    }
+
+    private async void ResetLearnedOffsetsClick(object? sender, RoutedEventArgs e)
+    {
+        if (!await ConfirmActionAsync(
+                "Reset curve learning?",
+                "THRM Core will forget its learned RPM corrections. The base fan curve is unchanged.",
+                "Reset"))
+        {
+            return;
+        }
+
+        if (await RunWriteAsync(
+                "Reset learned offsets",
+                async () =>
+                {
+                    await _ipc.ResetLearnedOffsetsAsync(_lifetime.Token);
+                    return true;
+                }))
+        {
             await RefreshFanCurveAsync();
         }
     }
@@ -700,10 +833,20 @@ public partial class MainWindow : Window
         SmartStartStopComboBox.IsEnabled = canChangeDeviceFeatures && !IsBs1;
         DeviceFeaturesStatusText.Text = GetDeviceFeaturesAvailabilityText(canChangeDeviceFeatures);
 
-        var canEditFanCurve = _ipc.IsConnected && _fanCurveKnown && !_fanCurveLoading && !_writeInProgress;
+        var canEditFanCurve = CanEditFanCurve;
+        var activeFanCurveProfile = ActiveFanCurveProfile();
         FanCurveProfileComboBox.IsEnabled = canEditFanCurve && _fanCurveProfiles.Count > 1;
+        FanCurveProfileNameTextBox.IsEnabled = canEditFanCurve && activeFanCurveProfile is not null;
+        RenameFanCurveProfileButton.IsEnabled = canEditFanCurve && activeFanCurveProfile is not null;
         NewFanCurveProfileNameTextBox.IsEnabled = canEditFanCurve;
         SaveFanCurveProfileButton.IsEnabled = canEditFanCurve;
+        ExportFanCurveProfilesButton.IsEnabled = canEditFanCurve;
+        FanCurveProfileImportCodeTextBox.IsEnabled = canEditFanCurve;
+        ImportFanCurveProfilesButton.IsEnabled = canEditFanCurve;
+        DeleteFanCurveProfileButton.IsEnabled = canEditFanCurve
+            && activeFanCurveProfile is not null
+            && _fanCurveProfiles.Count > 1;
+        ResetLearnedOffsetsButton.IsEnabled = canEditFanCurve;
         ReloadFanCurveButton.IsEnabled = _ipc.IsConnected && !_fanCurveLoading && !_writeInProgress;
         ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurveEditors.Count >= 2;
 
@@ -913,9 +1056,10 @@ public partial class MainWindow : Window
             _fanCurveProfiles.Clear();
             _fanCurveProfiles.AddRange(profiles.Profiles);
             _activeFanCurveProfileId = profiles.ActiveId;
+            var activeProfile = ActiveFanCurveProfile();
             FanCurveProfileComboBox.ItemsSource = _fanCurveProfiles.ToArray();
-            FanCurveProfileComboBox.SelectedItem = _fanCurveProfiles.FirstOrDefault(profile =>
-                string.Equals(profile.Id, _activeFanCurveProfileId, StringComparison.Ordinal));
+            FanCurveProfileComboBox.SelectedItem = activeProfile;
+            FanCurveProfileNameTextBox.Text = activeProfile?.Name ?? string.Empty;
 
             _fanCurveEditors.Clear();
             FanCurvePointsPanel.Children.Clear();
@@ -982,6 +1126,50 @@ public partial class MainWindow : Window
                 Rpm = double.IsFinite(editor.Rpm.Value) ? (int)Math.Round(editor.Rpm.Value) : 0,
             })
             .ToArray();
+    }
+
+    private bool CanEditFanCurve =>
+        _ipc.IsConnected && _fanCurveKnown && !_fanCurveLoading && !_writeInProgress;
+
+    private FanCurveProfileSnapshot? ActiveFanCurveProfile() =>
+        _fanCurveProfiles.FirstOrDefault(profile =>
+            string.Equals(profile.Id, _activeFanCurveProfileId, StringComparison.Ordinal));
+
+    private void ReplaceFanCurveProfile(FanCurveProfileSnapshot profile)
+    {
+        var index = _fanCurveProfiles.FindIndex(candidate =>
+            string.Equals(candidate.Id, profile.Id, StringComparison.Ordinal));
+        if (index < 0)
+        {
+            return;
+        }
+
+        _fanCurveLoading = true;
+        try
+        {
+            _fanCurveProfiles[index] = profile;
+            FanCurveProfileComboBox.ItemsSource = _fanCurveProfiles.ToArray();
+            FanCurveProfileComboBox.SelectedItem = profile;
+            FanCurveProfileNameTextBox.Text = profile.Name;
+        }
+        finally
+        {
+            _fanCurveLoading = false;
+        }
+    }
+
+    private async Task<bool> ConfirmActionAsync(string title, string message, string primaryButtonText)
+    {
+        var dialog = new FAContentDialog
+        {
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Cancel",
+            DefaultButton = FAContentDialogButton.Close,
+        };
+
+        return await dialog.ShowAsync(this) == FAContentDialogResult.Primary;
     }
 
     private bool TryReadFanCurve(out List<FanCurvePoint> curve, out string error)

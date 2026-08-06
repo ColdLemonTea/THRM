@@ -337,6 +337,19 @@
                             IsEnabled="False"
                             SelectionChanged="FanCurveProfileSelectionChanged" />
                 </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Profile name"
+                                           Description="Rename the active saved profile without applying editor changes.">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox x:Name="FanCurveProfileNameTextBox"
+                             PlaceholderText="Profile name"
+                             IsEnabled="False" />
+                    <Button x:Name="RenameFanCurveProfileButton"
+                            Grid.Column="1"
+                            Content="Rename"
+                            Click="RenameFanCurveProfileClick"
+                            IsEnabled="False" />
+                  </Grid>
+                </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Save as new profile"
                                            Description="Keep the current editor values as a separate saved profile.">
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
@@ -350,6 +363,40 @@
                             Click="SaveFanCurveProfileClick"
                             IsEnabled="False" />
                   </Grid>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Export saved profiles"
+                                           Description="Copy saved profiles to the clipboard. Unapplied editor changes are not included.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Button x:Name="ExportFanCurveProfilesButton"
+                            Content="Copy code"
+                            Click="ExportFanCurveProfilesClick"
+                            IsEnabled="False" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Import profiles"
+                                           Description="Paste a profile code exported by THRM. Its active profile becomes active here.">
+                  <StackPanel Spacing="8">
+                    <TextBox x:Name="FanCurveProfileImportCodeTextBox"
+                             AcceptsReturn="True"
+                             MinHeight="72"
+                             PlaceholderText="Paste profile code"
+                             TextWrapping="Wrap"
+                             IsEnabled="False" />
+                    <Button x:Name="ImportFanCurveProfilesButton"
+                            Content="Import"
+                            HorizontalAlignment="Right"
+                            Click="ImportFanCurveProfilesClick"
+                            IsEnabled="False" />
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Delete active profile"
+                                           Description="Remove the active saved profile. At least one profile must remain.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Button x:Name="DeleteFanCurveProfileButton"
+                            Content="Delete"
+                            Click="DeleteFanCurveProfileClick"
+                            IsEnabled="False" />
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Current availability.">
                   <TextBlock x:Name="FanCurveStateText"
@@ -402,6 +449,24 @@
                               IsEnabled="False" />
                     </StackPanel>
                   </StackPanel>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Curve learning"
+                                     Description="Manage the adaptive speed offsets learned by THRM Core."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="BrainCircuit" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Reset learned offsets"
+                                           Description="Forget adaptive RPM corrections. The base fan curve is unchanged.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Button x:Name="ResetLearnedOffsetsButton"
+                            Content="Reset"
+                            Click="ResetLearnedOffsetsClick"
+                            IsEnabled="False" />
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
