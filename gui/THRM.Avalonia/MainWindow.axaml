@@ -116,14 +116,24 @@
             <icons:FluentIconSource Icon="Home" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="Fan curve" Tag="fan-curve">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="ChartMultiple" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
         <ui:FANavigationViewItem Content="Fan control" Tag="fan-control">
           <ui:FANavigationViewItem.IconSource>
             <icons:FluentIconSource Icon="Temperature" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
-        <ui:FANavigationViewItem Content="Core &amp; device" Tag="core-device">
+        <ui:FANavigationViewItem Content="Device settings" Tag="device-settings">
           <ui:FANavigationViewItem.IconSource>
             <icons:FluentIconSource Icon="PlugConnected" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="Core" Tag="core">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="Server" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
       </ui:FANavigationView.MenuItems>
@@ -294,6 +304,95 @@
                 </Grid>
               </Border>
 
+           </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="FanCurvePage"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Fan curve" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Set the target fan speed for each temperature point through THRM Core."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Curve profile"
+                                     Description="Choose the saved curve THRM Core should use."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="ChartMultiple" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Active profile"
+                                           Description="Changing the selection applies that saved profile immediately.">
+                  <ComboBox x:Name="FanCurveProfileComboBox"
+                            HorizontalAlignment="Stretch"
+                            IsEnabled="False"
+                            SelectionChanged="FanCurveProfileSelectionChanged" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Save as new profile"
+                                           Description="Keep the current editor values as a separate saved profile.">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox x:Name="NewFanCurveProfileNameTextBox"
+                             PlaceholderText="Profile name"
+                             IsEnabled="False" />
+                    <Button x:Name="SaveFanCurveProfileButton"
+                            Grid.Column="1"
+                            Classes="accent"
+                            Content="Save"
+                            Click="SaveFanCurveProfileClick"
+                            IsEnabled="False" />
+                  </Grid>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Current availability.">
+                  <TextBlock x:Name="FanCurveStateText"
+                             Text="Waiting for THRM Core."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Curve editor"
+                                     Description="Temperatures must increase from top to bottom; target speeds cannot decrease."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="DataLine" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Description="Edit the active profile, then apply the complete curve.">
+                  <StackPanel Spacing="12">
+                    <Grid ColumnDefinitions="44,*,*" ColumnSpacing="12">
+                      <TextBlock Text="Point"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 FontSize="12" />
+                      <TextBlock Grid.Column="1"
+                                 Text="Temperature (°C)"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 FontSize="12" />
+                      <TextBlock Grid.Column="2"
+                                 Text="Target speed (RPM)"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 FontSize="12" />
+                    </Grid>
+                    <StackPanel x:Name="FanCurvePointsPanel" Spacing="8" />
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                Spacing="8">
+                      <Button x:Name="ReloadFanCurveButton"
+                              Content="Reload"
+                              Click="ReloadFanCurveClick"
+                              IsEnabled="False" />
+                      <Button x:Name="ApplyFanCurveButton"
+                              Classes="accent"
+                              Content="Apply changes"
+                              Click="ApplyFanCurveClick"
+                              IsEnabled="False" />
+                    </StackPanel>
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
             </StackPanel>
           </ScrollViewer>
 
@@ -322,6 +421,47 @@
                                   IsEnabled="False"
                                   Click="AutoControlClick" />
                   </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Custom fan speed"
+                                     Description="Hold the connected device at a specific target speed."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Gauge" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Enable custom speed"
+                                           Description="Custom speed overrides automatic control and manual presets.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="CustomSpeedSwitch"
+                                  IsEnabled="False"
+                                  Click="CustomSpeedClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Target speed"
+                                           Description="Choose a value from 1,000 to 4,000 RPM, then apply it.">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <ui:FANumberBox x:Name="CustomSpeedNumberBox"
+                                    Value="2000"
+                                    Minimum="1000"
+                                    Maximum="4000"
+                                    SmallChange="50"
+                                    SpinButtonPlacementMode="Compact"
+                                    IsEnabled="False" />
+                    <Button x:Name="ApplyCustomSpeedButton"
+                            Grid.Column="1"
+                            Classes="accent"
+                            Content="Apply"
+                            Click="ApplyCustomSpeedClick"
+                            IsEnabled="False" />
+                  </Grid>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Current availability.">
+                  <TextBlock x:Name="CustomSpeedStatusText"
+                             Text="Custom speed is waiting for synchronized Core state."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
 
@@ -392,13 +532,13 @@
             </StackPanel>
           </ScrollViewer>
 
-          <ScrollViewer x:Name="CoreDevicePage"
+          <ScrollViewer x:Name="DeviceSettingsPage"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">
               <StackPanel Spacing="4">
-                <TextBlock Text="Core &amp; device" FontSize="28" FontWeight="SemiBold" />
-                <TextBlock Text="Manage the device connection and the running THRM Core session through the existing IPC actions."
+                <TextBlock Text="Device settings" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Manage the connected device through the existing THRM Core actions."
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                            TextWrapping="Wrap" />
               </StackPanel>
@@ -423,6 +563,63 @@
                   </StackPanel>
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Hardware behavior"
+                                     Description="Configure supported device behavior while the device is connected."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Settings" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem x:Name="GearLightDeviceSetting"
+                                           Content="Gear light"
+                                           Description="Show the selected gear on supported devices.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="GearLightSwitch"
+                                  IsEnabled="False"
+                                  Click="GearLightClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Power-on start"
+                                           Description="Restore the device behavior when it receives power.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="PowerOnStartSwitch"
+                                  IsEnabled="False"
+                                  Click="PowerOnStartClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="SmartStartStopDeviceSetting"
+                                           Content="Smart start and stop"
+                                           Description="Choose when supported devices react to temperature changes.">
+                  <ComboBox x:Name="SmartStartStopComboBox"
+                            HorizontalAlignment="Stretch"
+                            IsEnabled="False"
+                            SelectionChanged="SmartStartStopSelectionChanged">
+                    <ComboBoxItem Content="Off" />
+                    <ComboBoxItem Content="Start immediately" />
+                    <ComboBoxItem Content="Start after delay" />
+                  </ComboBox>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Current availability.">
+                  <TextBlock x:Name="DeviceFeaturesStatusText"
+                             Text="Device features are waiting for synchronized Core state."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+            </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="CorePage"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Core" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Refresh synchronized state or control the running THRM Core session."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Core session"
@@ -465,11 +662,11 @@
                   <icons:FluentIconSource Icon="Info" />
                 </ui:FASettingsExpander.IconSource>
                 <ui:FASettingsExpanderItem Description="Migrated IPC slice.">
-                  <TextBlock Text="Connection, fan control, and Core/device actions."
+                  <TextBlock Text="Connection, fan curve editing, fan control, device settings, and Core actions."
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Remaining legacy features.">
-                  <TextBlock Text="Fan curve and Noise test remain in the legacy Wails frontend."
+                  <TextBlock Text="Curve profile management, noise calibration, temperature history, lighting, and system settings remain in the legacy Wails frontend."
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>

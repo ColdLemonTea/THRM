@@ -123,6 +123,12 @@ public sealed class ThrmIpcClient : IDisposable
     public Task<DeviceStatusSnapshot> GetDeviceStatusAsync(CancellationToken cancellationToken = default) =>
         SendRequestAsync<DeviceStatusSnapshot>("GetDeviceStatus", null, cancellationToken);
 
+    public Task<List<FanCurvePoint>> GetFanCurveAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<List<FanCurvePoint>>("GetFanCurve", null, cancellationToken);
+
+    public Task<FanCurveProfilesSnapshot> GetFanCurveProfilesAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<FanCurveProfilesSnapshot>("GetFanCurveProfiles", null, cancellationToken);
+
     public Task<bool> ShowWindowAsync(CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("ShowWindow", null, cancellationToken);
 
@@ -140,6 +146,32 @@ public sealed class ThrmIpcClient : IDisposable
 
     public Task<bool> SetManualGearAsync(string gear, string level, CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("SetManualGear", new { gear, level }, cancellationToken);
+
+    public Task<bool> SetCustomSpeedAsync(bool enabled, int rpm, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetCustomSpeed", new { enabled, rpm }, cancellationToken);
+
+    public Task<bool> SetGearLightAsync(bool enabled, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetGearLight", new { enabled }, cancellationToken);
+
+    public Task<bool> SetPowerOnStartAsync(bool enabled, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetPowerOnStart", new { enabled }, cancellationToken);
+
+    public Task<bool> SetSmartStartStopAsync(string value, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetSmartStartStop", new { value }, cancellationToken);
+
+    public Task<bool> SetFanCurveAsync(IReadOnlyList<FanCurvePoint> curve, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetFanCurve", curve, cancellationToken);
+
+    public Task<FanCurveProfileSnapshot> SetActiveFanCurveProfileAsync(string id, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<FanCurveProfileSnapshot>("SetActiveFanCurveProfile", new { id }, cancellationToken);
+
+    public Task<FanCurveProfileSnapshot> SaveFanCurveProfileAsync(
+        string id,
+        string name,
+        IReadOnlyList<FanCurvePoint> curve,
+        bool setActive,
+        CancellationToken cancellationToken = default) =>
+        SendRequestAsync<FanCurveProfileSnapshot>("SaveFanCurveProfile", new { id, name, curve, setActive }, cancellationToken);
 
     private async Task<T> SendRequestAsync<T>(string type, object? data, CancellationToken cancellationToken)
     {
@@ -544,6 +576,10 @@ public sealed class ConfigSnapshot
     [JsonPropertyName("manualGear")] public string? ManualGear { get; init; }
     [JsonPropertyName("manualLevel")] public string? ManualLevel { get; init; }
     [JsonPropertyName("customSpeedEnabled")] public bool CustomSpeedEnabled { get; init; }
+    [JsonPropertyName("customSpeedRPM")] public int CustomSpeedRpm { get; init; }
+    [JsonPropertyName("gearLight")] public bool GearLight { get; init; }
+    [JsonPropertyName("powerOnStart")] public bool PowerOnStart { get; init; }
+    [JsonPropertyName("smartStartStop")] public string? SmartStartStop { get; init; }
 }
 
 public sealed class DeviceStatusSnapshot
@@ -561,6 +597,27 @@ public sealed class FanDataSnapshot
     [JsonPropertyName("currentRpm")] public int CurrentRpm { get; init; }
     [JsonPropertyName("targetRpm")] public int TargetRpm { get; init; }
     [JsonPropertyName("workMode")] public string? WorkMode { get; init; }
+}
+
+public sealed class FanCurvePoint
+{
+    [JsonPropertyName("temperature")] public int Temperature { get; init; }
+    [JsonPropertyName("rpm")] public int Rpm { get; init; }
+}
+
+public sealed class FanCurveProfileSnapshot
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = string.Empty;
+    [JsonPropertyName("name")] public string Name { get; init; } = string.Empty;
+    [JsonPropertyName("curve")] public List<FanCurvePoint> Curve { get; init; } = [];
+
+    public override string ToString() => Name;
+}
+
+public sealed class FanCurveProfilesSnapshot
+{
+    [JsonPropertyName("profiles")] public List<FanCurveProfileSnapshot> Profiles { get; init; } = [];
+    [JsonPropertyName("activeId")] public string ActiveId { get; init; } = string.Empty;
 }
 
 public sealed class TemperatureSnapshot
@@ -622,6 +679,56 @@ internal static class IpcProtocolSelfCheck
             || level.GetString() != "中")
         {
             throw new InvalidOperationException("SetManualGear request check failed.");
+        }
+
+        var curve = new[]
+        {
+            new FanCurvePoint { Temperature = 30, Rpm = 1000 },
+            new FanCurvePoint { Temperature = 40, Rpm = 1600 },
+        };
+        using var curveRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetFanCurve", curve, "self-check-curve"));
+        var curveData = curveRequest.RootElement.GetProperty("data");
+        if (curveRequest.RootElement.GetProperty("type").GetString() != "SetFanCurve"
+            || curveData.ValueKind != JsonValueKind.Array
+            || curveData.GetArrayLength() != 2
+            || curveData[0].GetProperty("temperature").GetInt32() != 30
+            || curveData[1].GetProperty("rpm").GetInt32() != 1600)
+        {
+            throw new InvalidOperationException("SetFanCurve request check failed.");
+        }
+
+        using var customSpeedRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetCustomSpeed", new { enabled = true, rpm = 2200 }, "self-check-custom-speed"));
+        var customSpeedData = customSpeedRequest.RootElement.GetProperty("data");
+        if (customSpeedRequest.RootElement.GetProperty("type").GetString() != "SetCustomSpeed"
+            || customSpeedData.GetProperty("enabled").ValueKind != JsonValueKind.True
+            || customSpeedData.GetProperty("rpm").GetInt32() != 2200)
+        {
+            throw new InvalidOperationException("SetCustomSpeed request check failed.");
+        }
+
+        using var smartStartStopRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetSmartStartStop", new { value = "delayed" }, "self-check-smart-start-stop"));
+        var smartStartStopData = smartStartStopRequest.RootElement.GetProperty("data");
+        if (smartStartStopRequest.RootElement.GetProperty("type").GetString() != "SetSmartStartStop"
+            || smartStartStopData.GetProperty("value").GetString() != "delayed")
+        {
+            throw new InvalidOperationException("SetSmartStartStop request check failed.");
+        }
+
+        using var saveProfileRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine(
+                "SaveFanCurveProfile",
+                new { id = string.Empty, name = "Quiet", curve, setActive = true },
+                "self-check-save-profile"));
+        var saveProfileData = saveProfileRequest.RootElement.GetProperty("data");
+        if (saveProfileRequest.RootElement.GetProperty("type").GetString() != "SaveFanCurveProfile"
+            || saveProfileData.GetProperty("name").GetString() != "Quiet"
+            || !saveProfileData.GetProperty("setActive").GetBoolean()
+            || saveProfileData.GetProperty("curve").GetArrayLength() != 2)
+        {
+            throw new InvalidOperationException("SaveFanCurveProfile request check failed.");
         }
 
         var response = JsonSerializer.Deserialize<IpcMessage>(

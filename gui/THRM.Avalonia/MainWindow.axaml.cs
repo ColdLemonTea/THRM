@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Threading;
 using FluentIcons.Avalonia.Fluent;
 using FluentAvalonia.UI.Controls;
@@ -17,15 +18,26 @@ public partial class MainWindow : Window
     private bool _deviceStateKnown;
     private bool _autoControl;
     private bool _customSpeedEnabled;
+    private int _customSpeedRpm = 2000;
+    private bool _gearLight;
+    private bool _powerOnStart;
+    private string _smartStartStop = "off";
+    private bool _updatingConfigControls;
     private bool _configKnown;
     private bool _writeInProgress;
     private string? _deviceModel;
     private string? _manualGear;
     private string? _manualLevel;
     private Control? _currentPage;
+    private readonly List<(FANumberBox Temperature, FANumberBox Rpm)> _fanCurveEditors = [];
+    private readonly List<FanCurveProfileSnapshot> _fanCurveProfiles = [];
+    private string? _activeFanCurveProfileId;
+    private bool _fanCurveKnown;
+    private bool _fanCurveLoading;
 
     private static readonly string[] ManualGearValues = ["静音", "标准", "强劲", "超频"];
     private static readonly string[] ManualLevelValues = ["低", "中", "高"];
+    private static readonly string[] SmartStartStopValues = ["off", "immediate", "delayed"];
 
     public MainWindow()
     {
@@ -50,8 +62,10 @@ public partial class MainWindow : Window
         var nextPage = page switch
         {
             "status" => StatusPage,
+            "fan-curve" => FanCurvePage,
             "fan-control" => FanControlPage,
-            "core-device" => CoreDevicePage,
+            "device-settings" => DeviceSettingsPage,
+            "core" => CorePage,
             "about" => AboutPage,
             _ => null,
         };
@@ -63,6 +77,10 @@ public partial class MainWindow : Window
 
         PageHost.Content = nextPage;
         _currentPage = nextPage;
+        if (ReferenceEquals(nextPage, FanCurvePage))
+        {
+            _ = RefreshFanCurveAsync();
+        }
     }
 
     private async void WindowOpened(object? sender, EventArgs e)
@@ -103,6 +121,10 @@ public partial class MainWindow : Window
             if (e.Connected)
             {
                 _ = RefreshStateAsync();
+                if (ReferenceEquals(_currentPage, FanCurvePage))
+                {
+                    _ = RefreshFanCurveAsync();
+                }
             }
         });
     }
@@ -165,6 +187,93 @@ public partial class MainWindow : Window
         await RunWriteAsync(action, () => _ipc.SetAutoControlAsync(enabled, _lifetime.Token));
     }
 
+    private async void CustomSpeedClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeCustomSpeed())
+        {
+            CustomSpeedSwitch.IsChecked = _customSpeedEnabled;
+            return;
+        }
+
+        var enabled = CustomSpeedSwitch.IsChecked == true;
+        CustomSpeedSwitch.IsChecked = _customSpeedEnabled;
+        var rpm = _customSpeedRpm;
+        if (enabled && !TryReadCustomSpeed(out rpm, out var error))
+        {
+            SetActivity(error, FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        await RunWriteAsync(
+            enabled ? "Enable custom fan speed" : "Disable custom fan speed",
+            () => _ipc.SetCustomSpeedAsync(enabled, rpm, _lifetime.Token));
+    }
+
+    private async void ApplyCustomSpeedClick(object? sender, RoutedEventArgs e)
+    {
+        if (!_customSpeedEnabled)
+        {
+            SetActivity("Enable custom speed before applying a target speed.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!TryReadCustomSpeed(out var rpm, out var error))
+        {
+            SetActivity(error, FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        await RunWriteAsync("Apply custom fan speed", () => _ipc.SetCustomSpeedAsync(true, rpm, _lifetime.Token));
+    }
+
+    private async void GearLightClick(object? sender, RoutedEventArgs e)
+    {
+        if (IsBs1 || !CanChangeDeviceFeatures())
+        {
+            GearLightSwitch.IsChecked = _gearLight;
+            return;
+        }
+
+        var enabled = GearLightSwitch.IsChecked == true;
+        GearLightSwitch.IsChecked = _gearLight;
+        await RunWriteAsync(
+            enabled ? "Enable gear light" : "Disable gear light",
+            () => _ipc.SetGearLightAsync(enabled, _lifetime.Token));
+    }
+
+    private async void PowerOnStartClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeDeviceFeatures())
+        {
+            PowerOnStartSwitch.IsChecked = _powerOnStart;
+            return;
+        }
+
+        var enabled = PowerOnStartSwitch.IsChecked == true;
+        PowerOnStartSwitch.IsChecked = _powerOnStart;
+        await RunWriteAsync(
+            enabled ? "Enable power-on start" : "Disable power-on start",
+            () => _ipc.SetPowerOnStartAsync(enabled, _lifetime.Token));
+    }
+
+    private async void SmartStartStopSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingConfigControls || _writeInProgress || IsBs1 || !CanChangeDeviceFeatures())
+        {
+            SelectCoreValue(SmartStartStopComboBox, SmartStartStopValues, _smartStartStop);
+            return;
+        }
+
+        var value = SelectedCoreValue(SmartStartStopComboBox, SmartStartStopValues);
+        if (value is null || string.Equals(value, _smartStartStop, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        SelectCoreValue(SmartStartStopComboBox, SmartStartStopValues, _smartStartStop);
+        await RunWriteAsync("Set smart start and stop", () => _ipc.SetSmartStartStopAsync(value, _lifetime.Token));
+    }
+
     private async void ApplyManualGearClick(object? sender, RoutedEventArgs e)
     {
         if (!CanChangeManualControl())
@@ -193,6 +302,72 @@ public partial class MainWindow : Window
     }
 
     private void ManualSelectionChanged(object? sender, SelectionChangedEventArgs e) => SetActionAvailability();
+
+    private async void ReloadFanCurveClick(object? sender, RoutedEventArgs e) => await RefreshFanCurveAsync();
+
+    private async void FanCurveProfileSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_fanCurveLoading
+            || _writeInProgress
+            || FanCurveProfileComboBox.SelectedItem is not FanCurveProfileSnapshot profile
+            || string.Equals(profile.Id, _activeFanCurveProfileId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (await RunWriteAsync(
+                "Switch fan curve profile",
+                async () =>
+                {
+                    await _ipc.SetActiveFanCurveProfileAsync(profile.Id, _lifetime.Token);
+                    return true;
+                }))
+        {
+            await RefreshFanCurveAsync();
+        }
+    }
+
+    private async void SaveFanCurveProfileClick(object? sender, RoutedEventArgs e)
+    {
+        var name = NewFanCurveProfileNameTextBox.Text?.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            SetActivity("Enter a profile name before saving.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!TryReadFanCurve(out var curve, out var error))
+        {
+            SetActivity(error, FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (await RunWriteAsync(
+                "Save fan curve profile",
+                async () =>
+                {
+                    await _ipc.SaveFanCurveProfileAsync(string.Empty, name, curve, true, _lifetime.Token);
+                    return true;
+                }))
+        {
+            NewFanCurveProfileNameTextBox.Text = string.Empty;
+            await RefreshFanCurveAsync();
+        }
+    }
+
+    private async void ApplyFanCurveClick(object? sender, RoutedEventArgs e)
+    {
+        if (!TryReadFanCurve(out var curve, out var error))
+        {
+            SetActivity(error, FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (await RunWriteAsync("Apply fan curve", () => _ipc.SetFanCurveAsync(curve, _lifetime.Token)))
+        {
+            await RefreshFanCurveAsync();
+        }
+    }
 
     private async void ShowWindowClick(object? sender, RoutedEventArgs e)
     {
@@ -305,6 +480,11 @@ public partial class MainWindow : Window
         ConnectionInfoBar.IsOpen = !connected;
         _deviceStateKnown = false;
         _configKnown = false;
+        _fanCurveKnown = connected && _fanCurveKnown;
+        if (!connected)
+        {
+            FanCurveStateText.Text = "Fan curve editing unavailable: THRM Core is not connected.";
+        }
         SetActionAvailability();
     }
 
@@ -327,22 +507,39 @@ public partial class MainWindow : Window
 
     private void ApplyConfig(ConfigSnapshot config)
     {
-        _autoControl = config.AutoControl;
-        _customSpeedEnabled = config.CustomSpeedEnabled;
-        if (!string.IsNullOrWhiteSpace(config.ManualGear))
+        _updatingConfigControls = true;
+        try
         {
-            _manualGear = config.ManualGear;
-        }
+            _autoControl = config.AutoControl;
+            _customSpeedEnabled = config.CustomSpeedEnabled;
+            _customSpeedRpm = config.CustomSpeedRpm is >= 1000 and <= 4000 ? config.CustomSpeedRpm : 2000;
+            _gearLight = config.GearLight;
+            _powerOnStart = config.PowerOnStart;
+            _smartStartStop = SmartStartStopValues.Contains(config.SmartStartStop) ? config.SmartStartStop! : "off";
+            if (!string.IsNullOrWhiteSpace(config.ManualGear))
+            {
+                _manualGear = config.ManualGear;
+            }
 
-        if (!string.IsNullOrWhiteSpace(config.ManualLevel))
+            if (!string.IsNullOrWhiteSpace(config.ManualLevel))
+            {
+                _manualLevel = config.ManualLevel;
+            }
+
+            AutoControlSwitch.IsChecked = _autoControl;
+            CustomSpeedSwitch.IsChecked = _customSpeedEnabled;
+            CustomSpeedNumberBox.Value = _customSpeedRpm;
+            GearLightSwitch.IsChecked = _gearLight;
+            PowerOnStartSwitch.IsChecked = _powerOnStart;
+            SelectCoreValue(SmartStartStopComboBox, SmartStartStopValues, _smartStartStop);
+            SelectCoreValue(ManualGearComboBox, ManualGearValues, _manualGear);
+            SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
+            UpdateManualAppliedText();
+        }
+        finally
         {
-            _manualLevel = config.ManualLevel;
+            _updatingConfigControls = false;
         }
-
-        AutoControlSwitch.IsChecked = _autoControl;
-        SelectCoreValue(ManualGearComboBox, ManualGearValues, _manualGear);
-        SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
-        UpdateManualAppliedText();
     }
 
     private void ApplyDeviceStatus(DeviceStatusSnapshot status)
@@ -395,7 +592,7 @@ public partial class MainWindow : Window
         var canChangeDevice = _ipc.IsConnected && _deviceStateKnown && !_writeInProgress;
         ConnectDeviceButton.IsEnabled = canChangeDevice && !_deviceConnected;
         DisconnectDeviceButton.IsEnabled = canChangeDevice && _deviceConnected;
-        AutoControlSwitch.IsEnabled = _ipc.IsConnected && _configKnown && !_writeInProgress;
+        AutoControlSwitch.IsEnabled = _ipc.IsConnected && _configKnown && !_writeInProgress && !_customSpeedEnabled;
 
         var canChangeManual = CanChangeManualControl();
         ManualGearComboBox.IsEnabled = canChangeManual;
@@ -407,6 +604,171 @@ public partial class MainWindow : Window
             && SelectedCoreValue(ManualGearComboBox, ManualGearValues) is not null
             && (IsBs1 || SelectedCoreValue(ManualLevelComboBox, ManualLevelValues) is not null);
         ManualControlAvailabilityText.Text = GetManualControlAvailabilityText(canChangeManual);
+
+        var canChangeCustomSpeed = CanChangeCustomSpeed();
+        CustomSpeedSwitch.IsEnabled = canChangeCustomSpeed;
+        CustomSpeedNumberBox.IsEnabled = canChangeCustomSpeed && _customSpeedEnabled;
+        ApplyCustomSpeedButton.IsEnabled = canChangeCustomSpeed && _customSpeedEnabled;
+        CustomSpeedStatusText.Text = GetCustomSpeedAvailabilityText(canChangeCustomSpeed);
+
+        var canChangeDeviceFeatures = CanChangeDeviceFeatures();
+        GearLightDeviceSetting.IsVisible = !IsBs1;
+        GearLightSwitch.IsEnabled = canChangeDeviceFeatures && !IsBs1;
+        PowerOnStartSwitch.IsEnabled = canChangeDeviceFeatures;
+        SmartStartStopDeviceSetting.IsVisible = !IsBs1;
+        SmartStartStopComboBox.IsEnabled = canChangeDeviceFeatures && !IsBs1;
+        DeviceFeaturesStatusText.Text = GetDeviceFeaturesAvailabilityText(canChangeDeviceFeatures);
+
+        var canEditFanCurve = _ipc.IsConnected && _fanCurveKnown && !_fanCurveLoading && !_writeInProgress;
+        FanCurveProfileComboBox.IsEnabled = canEditFanCurve && _fanCurveProfiles.Count > 1;
+        NewFanCurveProfileNameTextBox.IsEnabled = canEditFanCurve;
+        SaveFanCurveProfileButton.IsEnabled = canEditFanCurve;
+        ReloadFanCurveButton.IsEnabled = _ipc.IsConnected && !_fanCurveLoading && !_writeInProgress;
+        ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurveEditors.Count >= 2;
+    }
+
+    private async Task RefreshFanCurveAsync()
+    {
+        if (!_ipc.IsConnected)
+        {
+            _fanCurveKnown = false;
+            FanCurveStateText.Text = "Fan curve editing unavailable: THRM Core is not connected.";
+            SetActionAvailability();
+            return;
+        }
+
+        _fanCurveLoading = true;
+        FanCurveStateText.Text = "Loading the active curve from THRM Core...";
+        SetActionAvailability();
+        try
+        {
+            var curveTask = _ipc.GetFanCurveAsync(_lifetime.Token);
+            var profilesTask = _ipc.GetFanCurveProfilesAsync(_lifetime.Token);
+            await Task.WhenAll(curveTask, profilesTask);
+            ApplyFanCurve(curveTask.Result, profilesTask.Result);
+            _fanCurveKnown = _fanCurveEditors.Count >= 2;
+            FanCurveStateText.Text = _fanCurveKnown
+                ? "Active curve loaded from THRM Core."
+                : "THRM Core returned an incomplete curve.";
+        }
+        catch (Exception ex)
+        {
+            _fanCurveKnown = false;
+            FanCurveStateText.Text = "Fan curve could not be loaded; known values were retained.";
+            SetActivity($"Fan curve refresh failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _fanCurveLoading = false;
+            SetActionAvailability();
+        }
+    }
+
+    private void ApplyFanCurve(IReadOnlyList<FanCurvePoint> curve, FanCurveProfilesSnapshot profiles)
+    {
+        _fanCurveLoading = true;
+        try
+        {
+            _fanCurveProfiles.Clear();
+            _fanCurveProfiles.AddRange(profiles.Profiles);
+            _activeFanCurveProfileId = profiles.ActiveId;
+            FanCurveProfileComboBox.ItemsSource = _fanCurveProfiles.ToArray();
+            FanCurveProfileComboBox.SelectedItem = _fanCurveProfiles.FirstOrDefault(profile =>
+                string.Equals(profile.Id, _activeFanCurveProfileId, StringComparison.Ordinal));
+
+            _fanCurveEditors.Clear();
+            FanCurvePointsPanel.Children.Clear();
+            for (var index = 0; index < curve.Count; index++)
+            {
+                var temperature = new FANumberBox
+                {
+                    Minimum = 0,
+                    Maximum = 110,
+                    SmallChange = 1,
+                    SpinButtonPlacementMode = FANumberBoxSpinButtonPlacementMode.Compact,
+                    Value = curve[index].Temperature,
+                };
+                var rpm = new FANumberBox
+                {
+                    Minimum = 0,
+                    Maximum = 4000,
+                    SmallChange = 100,
+                    SpinButtonPlacementMode = FANumberBoxSpinButtonPlacementMode.Compact,
+                    Value = curve[index].Rpm,
+                };
+                var row = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("44,*,*"),
+                    ColumnSpacing = 12,
+                };
+                row.Children.Add(new TextBlock
+                {
+                    Text = (index + 1).ToString(),
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                row.Children.Add(temperature);
+                row.Children.Add(rpm);
+                Grid.SetColumn(temperature, 1);
+                Grid.SetColumn(rpm, 2);
+                FanCurvePointsPanel.Children.Add(row);
+                _fanCurveEditors.Add((temperature, rpm));
+            }
+        }
+        finally
+        {
+            _fanCurveLoading = false;
+        }
+    }
+
+    private bool TryReadFanCurve(out List<FanCurvePoint> curve, out string error)
+    {
+        curve = [];
+        if (_fanCurveEditors.Count < 2)
+        {
+            error = "A fan curve needs at least two points.";
+            return false;
+        }
+
+        for (var index = 0; index < _fanCurveEditors.Count; index++)
+        {
+            var temperatureValue = _fanCurveEditors[index].Temperature.Value;
+            var rpmValue = _fanCurveEditors[index].Rpm.Value;
+            if (!double.IsFinite(temperatureValue) || !double.IsFinite(rpmValue)
+                || temperatureValue != Math.Truncate(temperatureValue)
+                || rpmValue != Math.Truncate(rpmValue))
+            {
+                error = $"Point {index + 1} must use whole-number temperature and speed values.";
+                return false;
+            }
+
+            var point = new FanCurvePoint
+            {
+                Temperature = (int)temperatureValue,
+                Rpm = (int)rpmValue,
+            };
+            if (point.Temperature is < 0 or > 110 || point.Rpm is < 0 or > 4000)
+            {
+                error = $"Point {index + 1} is outside the supported range.";
+                return false;
+            }
+
+            if (curve.Count > 0 && point.Temperature <= curve[^1].Temperature)
+            {
+                error = "Temperature points must increase from top to bottom.";
+                return false;
+            }
+
+            if (curve.Count > 0 && point.Rpm < curve[^1].Rpm)
+            {
+                error = "Target speeds cannot decrease from top to bottom.";
+                return false;
+            }
+
+            curve.Add(point);
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     private bool CanChangeManualControl() =>
@@ -417,6 +779,88 @@ public partial class MainWindow : Window
         && !_writeInProgress
         && !_autoControl
         && !_customSpeedEnabled;
+
+    private bool CanChangeDeviceFeatures() =>
+        _ipc.IsConnected
+        && _deviceStateKnown
+        && _configKnown
+        && _deviceConnected
+        && !_writeInProgress;
+
+    private bool CanChangeCustomSpeed() => CanChangeDeviceFeatures();
+
+    private bool TryReadCustomSpeed(out int rpm, out string error)
+    {
+        var value = CustomSpeedNumberBox.Value;
+        if (!double.IsFinite(value) || value != Math.Truncate(value) || value is < 1000 or > 4000)
+        {
+            rpm = 0;
+            error = "Custom fan speed must be a whole number from 1,000 to 4,000 RPM.";
+            return false;
+        }
+
+        rpm = (int)value;
+        error = string.Empty;
+        return true;
+    }
+
+    private string GetCustomSpeedAvailabilityText(bool canChangeCustomSpeed)
+    {
+        if (!_ipc.IsConnected)
+        {
+            return "Custom speed unavailable: THRM Core is not connected.";
+        }
+
+        if (!_deviceStateKnown || !_configKnown)
+        {
+            return "Custom speed unavailable: waiting for synchronized device and configuration state.";
+        }
+
+        if (!_deviceConnected)
+        {
+            return "Custom speed unavailable: connect a device first.";
+        }
+
+        if (_writeInProgress)
+        {
+            return "Custom speed unavailable: a write is in progress.";
+        }
+
+        return canChangeCustomSpeed
+            ? _customSpeedEnabled
+                ? $"Custom speed enabled at {_customSpeedRpm} RPM."
+                : "Custom speed is disabled."
+            : "Custom speed unavailable: current state does not permit writes.";
+    }
+
+    private string GetDeviceFeaturesAvailabilityText(bool canChangeDeviceFeatures)
+    {
+        if (!_ipc.IsConnected)
+        {
+            return "Device features unavailable: THRM Core is not connected.";
+        }
+
+        if (!_deviceStateKnown || !_configKnown)
+        {
+            return "Device features unavailable: waiting for synchronized device and configuration state.";
+        }
+
+        if (!_deviceConnected)
+        {
+            return "Device features unavailable: connect a device first.";
+        }
+
+        if (_writeInProgress)
+        {
+            return "Device features unavailable: a write is in progress.";
+        }
+
+        return canChangeDeviceFeatures
+            ? IsBs1
+                ? "This device supports power-on start."
+                : "Device features are ready."
+            : "Device features unavailable: current state does not permit writes.";
+    }
 
     private string GetManualControlAvailabilityText(bool canChangeManual)
     {
