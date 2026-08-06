@@ -565,6 +565,21 @@
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Power history"
+                                     Description="Review CPU and GPU power readings recorded with the same timestamps."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="DataLine" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Description="Hover either chart to inspect the same recorded time.">
+                  <local:TemperatureHistoryPreview x:Name="PowerHistoryPreview"
+                                                   Metric="Power"
+                                                   Height="220"
+                                                   HorizontalAlignment="Stretch" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
             </StackPanel>
           </ScrollViewer>
 

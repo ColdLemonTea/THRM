@@ -39,6 +39,7 @@ public sealed class FanCurvePreview : Control
             this,
             "Drag a curve point vertically to change its target speed. Speeds snap to 50 RPM and remain non-decreasing. Use the arrow keys after selecting a point for the same adjustment.");
         PointerPressed += OnPointerPressed;
+        PointerEntered += OnPointerEntered;
         PointerMoved += OnPointerMoved;
         PointerReleased += OnPointerReleased;
         PointerCaptureLost += OnPointerCaptureLost;
@@ -75,6 +76,8 @@ public sealed class FanCurvePreview : Control
         {
             return;
         }
+
+        context.DrawRectangle(Brushes.Transparent, null, Bounds);
 
         var dark = ActualThemeVariant == ThemeVariant.Dark;
         var primary = FindBrush(
@@ -118,13 +121,14 @@ public sealed class FanCurvePreview : Control
         var axisPen = new Pen(secondary, 1);
         context.DrawLine(axisPen, new Point(plot.Left, plot.Top), new Point(plot.Left, plot.Bottom));
         context.DrawLine(axisPen, new Point(plot.Left, plot.Bottom), new Point(plot.Right, plot.Bottom));
-        DrawText(context, secondary, "RPM", new Point(4, 3));
+        const double headerTextTop = 6;
+        DrawText(context, secondary, "RPM", new Point(4, headerTextTop - 1));
         DrawText(context, secondary, "Temperature (°C)", new Point(plot.Left + plot.Width / 2 - 47, Bounds.Height - 16));
 
-        DrawLegend(context, accent, primary, "Base curve", plot.Left, 7, false);
+        DrawLegend(context, accent, primary, "Base curve", plot.Left, headerTextTop, false);
         if (LearnedPoints is { Count: > 0 })
         {
-            DrawLegend(context, learned, primary, "Learned effective curve", plot.Left + 98, 7, true);
+            DrawLegend(context, learned, primary, "Learned effective curve", plot.Left + 98, headerTextTop, true);
         }
 
         var basePoints = Points;
@@ -139,19 +143,21 @@ public sealed class FanCurvePreview : Control
             DrawCurve(context, LearnedPoints, plot, new Pen(learned, 2, new DashStyle(new[] { 5d, 3d }, 0)));
             DrawCurve(context, basePoints, plot, new Pen(accent, 2.5));
 
-            for (var index = 0; index < basePoints.Count; index++)
-            {
-                var point = PointFor(basePoints[index], plot);
-                var isActive = index == _draggedIndex || index == _selectedIndex;
-                var radius = isActive ? 6 : 4.5;
-                context.DrawEllipse(accent, new Pen(surface, 2), point, radius, radius);
-            }
-
             if (_hoveredIndex is { } hovered && hovered >= 0 && hovered < basePoints.Count)
             {
                 var point = PointFor(basePoints[hovered], plot);
                 context.DrawLine(new Pen(accent, 1, DashStyle.Dash), new Point(point.X, plot.Top), new Point(point.X, plot.Bottom));
             }
+        }
+
+        // Curve lines stay inside the plot, but handles may sit on the maximum value.
+        // Drawing them after the clip keeps a 4,000 RPM handle whole instead of halving it.
+        for (var index = 0; index < basePoints.Count; index++)
+        {
+            var point = PointFor(basePoints[index], plot);
+            var isActive = index == _draggedIndex || index == _selectedIndex;
+            var radius = isActive ? 6 : 4.5;
+            context.DrawEllipse(accent, new Pen(surface, 2), point, radius, radius);
         }
 
         if (_hoveredIndex is { } tooltipIndex && tooltipIndex >= 0 && tooltipIndex < basePoints.Count)
@@ -214,6 +220,14 @@ public sealed class FanCurvePreview : Control
         e.Handled = true;
     }
 
+    private void OnPointerEntered(object? sender, PointerEventArgs e)
+    {
+        if (TryGetPlot(out var plot))
+        {
+            UpdateHover(e.GetPosition(this), plot);
+        }
+    }
+
     private void OnPointerMoved(object? sender, PointerEventArgs e)
     {
         if (!TryGetPlot(out var plot))
@@ -227,15 +241,21 @@ public sealed class FanCurvePreview : Control
             return;
         }
 
-        var next = NearestPointByTemperature(e.GetPosition(this), plot);
+        UpdateHover(e.GetPosition(this), plot);
+    }
+
+    private void UpdateHover(Point pointer, Rect plot)
+    {
+        var next = NearestPointByTemperature(pointer, plot);
         if (_hoveredIndex != next)
         {
             _hoveredIndex = next;
-            Cursor = next is not null && IsEditable
-                ? new Cursor(StandardCursorType.SizeNorthSouth)
-                : Cursor.Default;
             InvalidateVisual();
         }
+
+        Cursor = IsEditable && HitTestPoint(pointer, plot) is not null
+            ? new Cursor(StandardCursorType.SizeNorthSouth)
+            : Cursor.Default;
     }
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e) => EndDrag(e.Pointer);
@@ -403,7 +423,7 @@ public sealed class FanCurvePreview : Control
     {
         var pen = dashed ? new Pen(lineBrush, 2, new DashStyle(new[] { 5d, 3d }, 0)) : new Pen(lineBrush, 2);
         context.DrawLine(pen, new Point(x, y + 6), new Point(x + 18, y + 6));
-        DrawText(context, textBrush, label, new Point(x + 23, y));
+        DrawText(context, textBrush, label, new Point(x + 23, y - 1));
     }
 
     private IBrush FindBrush(IBrush fallback, params string[] keys)

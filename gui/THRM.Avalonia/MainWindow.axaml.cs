@@ -62,6 +62,8 @@ public partial class MainWindow : Window
         _ipc.ConnectionChanged += IpcConnectionChanged;
         _ipc.EventReceived += CoreEventReceived;
         FanCurvePreview.PointDragged += FanCurvePreviewPointDragged;
+        TemperatureHistoryPreview.HoverChanged += HistoryPreviewHoverChanged;
+        PowerHistoryPreview.HoverChanged += HistoryPreviewHoverChanged;
         Opened += WindowOpened;
         Closing += WindowClosing;
     }
@@ -953,7 +955,7 @@ public partial class MainWindow : Window
             _temperatureHistoryKnown = true;
             TemperatureHistoryEnabledSwitch.IsChecked = _temperatureHistoryEnabled;
             SelectTemperatureHistoryRetention();
-            TemperatureHistoryPreview.Points = _temperatureHistory.ToArray();
+            UpdateTemperatureHistoryPreviews();
             UpdateTemperatureHistorySummary();
             UpdateTemperatureHistoryStateText();
         }
@@ -992,7 +994,7 @@ public partial class MainWindow : Window
             _temperatureHistory.RemoveAt(0);
         }
 
-        TemperatureHistoryPreview.Points = _temperatureHistory.ToArray();
+        UpdateTemperatureHistoryPreviews();
         UpdateTemperatureHistorySummary();
         UpdateTemperatureHistoryStateText();
     }
@@ -1014,6 +1016,26 @@ public partial class MainWindow : Window
         finally
         {
             _updatingTemperatureHistoryControls = wasUpdating;
+        }
+    }
+
+    private void UpdateTemperatureHistoryPreviews()
+    {
+        var points = _temperatureHistory.ToArray();
+        TemperatureHistoryPreview.Points = points;
+        PowerHistoryPreview.Points = points;
+    }
+
+    private void HistoryPreviewHoverChanged(object? sender, HistoryHoverChangedEventArgs e)
+    {
+        if (!ReferenceEquals(sender, TemperatureHistoryPreview))
+        {
+            TemperatureHistoryPreview.HoverTimestamp = e.Timestamp;
+        }
+
+        if (!ReferenceEquals(sender, PowerHistoryPreview))
+        {
+            PowerHistoryPreview.HoverTimestamp = e.Timestamp;
         }
     }
 

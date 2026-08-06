@@ -11,6 +11,7 @@ internal static class Program
         {
             IpcProtocolSelfCheck.Run();
             FanCurveEdit.SelfCheck();
+            TemperatureHistoryPreview.SelfCheck();
             return;
         }
 
