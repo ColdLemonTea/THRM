@@ -1,7 +1,9 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Notifications;
 using Avalonia.Interactivity;
-using Avalonia.Media;
 using Avalonia.Threading;
+using FluentIcons.Avalonia.Fluent;
+using FluentAvalonia.UI.Controls;
 
 namespace THRM.Avalonia;
 
@@ -10,6 +12,7 @@ public partial class MainWindow : Window
     private readonly ThrmIpcClient _ipc = new();
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _recoveryLoop;
+    private WindowNotificationManager? _notifications;
     private bool _deviceConnected;
     private bool _deviceStateKnown;
     private bool _autoControl;
@@ -19,6 +22,7 @@ public partial class MainWindow : Window
     private string? _deviceModel;
     private string? _manualGear;
     private string? _manualLevel;
+    private Control? _currentPage;
 
     private static readonly string[] ManualGearValues = ["静音", "标准", "强劲", "超频"];
     private static readonly string[] ManualLevelValues = ["低", "中", "高"];
@@ -26,10 +30,39 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        PageCache.Children.Clear();
+        PageHost.Content = StatusPage;
+        _currentPage = StatusPage;
+        NavigationView.SelectedItem = StatusNavigationItem;
         _ipc.ConnectionChanged += IpcConnectionChanged;
         _ipc.EventReceived += CoreEventReceived;
         Opened += WindowOpened;
         Closing += WindowClosing;
+    }
+
+    private void NavigationViewSelectionChanged(object? sender, FANavigationViewSelectionChangedEventArgs e)
+    {
+        if (e.SelectedItem is not FANavigationViewItem item || item.Tag is not string page)
+        {
+            return;
+        }
+
+        var nextPage = page switch
+        {
+            "status" => StatusPage,
+            "fan-control" => FanControlPage,
+            "core-device" => CoreDevicePage,
+            "about" => AboutPage,
+            _ => null,
+        };
+
+        if (nextPage is null || ReferenceEquals(nextPage, _currentPage))
+        {
+            return;
+        }
+
+        PageHost.Content = nextPage;
+        _currentPage = nextPage;
     }
 
     private async void WindowOpened(object? sender, EventArgs e)
@@ -38,6 +71,12 @@ public partial class MainWindow : Window
         {
             return;
         }
+
+        _notifications = new WindowNotificationManager(this)
+        {
+            Position = NotificationPosition.BottomRight,
+            MaxItems = 1,
+        };
 
         try
         {
@@ -50,7 +89,7 @@ public partial class MainWindow : Window
         catch
         {
             CoreProcessLauncher.TryStart(out var status);
-            StatusText.Text = $"{status} Waiting for IPC.";
+            SetActivity($"{status} Waiting for IPC.", FAInfoBarSeverity.Informational);
         }
 
         _recoveryLoop = _ipc.RunRecoveryLoopAsync(_lifetime.Token);
@@ -98,7 +137,7 @@ public partial class MainWindow : Window
             case "device-error":
                 if (e.TryGetData<string>(out var error))
                 {
-                    Dispatcher.UIThread.Post(() => StatusText.Text = error);
+                    Dispatcher.UIThread.Post(() => SetActivity(error ?? "THRM Core reported an unspecified device error.", FAInfoBarSeverity.Error));
                 }
                 break;
         }
@@ -140,7 +179,7 @@ public partial class MainWindow : Window
             : SelectedCoreValue(ManualLevelComboBox, ManualLevelValues);
         if (gear is null || level is null)
         {
-            StatusText.Text = "Choose a gear and level before applying.";
+            SetActivity("Choose a gear and level before applying.", FAInfoBarSeverity.Warning);
             return;
         }
 
@@ -161,10 +200,11 @@ public partial class MainWindow : Window
         {
             await _ipc.ShowWindowAsync();
             Show();
+            SetActivity("THRM Core window shown.", FAInfoBarSeverity.Success);
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Show window failed: {ex.Message}";
+            SetActivity($"Show window failed: {ex.Message}", FAInfoBarSeverity.Error);
         }
     }
 
@@ -173,11 +213,11 @@ public partial class MainWindow : Window
         try
         {
             await _ipc.QuitCoreAsync();
-            StatusText.Text = "Quit request sent; no request replay is attempted.";
+            SetActivity("Quit request sent; no request replay is attempted.", FAInfoBarSeverity.Informational);
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Quit core failed: {ex.Message}";
+            SetActivity($"Quit core failed: {ex.Message}", FAInfoBarSeverity.Error);
         }
     }
 
@@ -190,33 +230,33 @@ public partial class MainWindow : Window
 
         if (!_ipc.IsConnected)
         {
-            StatusText.Text = $"{action} unavailable: THRM Core is not connected; known state retained.";
+            SetActivity($"{action} unavailable: THRM Core is not connected; known state retained.", FAInfoBarSeverity.Warning);
             return false;
         }
 
         _writeInProgress = true;
         SetActionAvailability();
-        StatusText.Text = $"{action} in progress...";
+        SetActivity($"{action} in progress...", FAInfoBarSeverity.Informational, TimeSpan.FromSeconds(10));
         try
         {
             if (!await request())
             {
-                StatusText.Text = $"{action} was rejected; known state retained.";
+                SetActivity($"{action} was rejected; known state retained.", FAInfoBarSeverity.Warning);
                 return false;
             }
 
             if (await RefreshStateAsync())
             {
-                StatusText.Text = $"{action} succeeded; state synchronized.";
+                SetActivity($"{action} succeeded; state synchronized.", FAInfoBarSeverity.Success);
                 return true;
             }
 
-            StatusText.Text = $"{action} accepted, but state was not synchronized; known state retained.";
+            SetActivity($"{action} accepted, but state was not synchronized; known state retained.", FAInfoBarSeverity.Warning);
             return false;
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"{action} failed: {ex.Message}; known state retained.";
+            SetActivity($"{action} failed: {ex.Message}; known state retained.", FAInfoBarSeverity.Error);
             return false;
         }
         finally
@@ -247,7 +287,6 @@ public partial class MainWindow : Window
             _configKnown = true;
             _deviceStateKnown = true;
             SetActionAvailability();
-            StatusText.Text = "Core state synchronized";
             LastUpdateText.Text = $"Last update: {DateTime.Now:HH:mm:ss}";
             return true;
         }
@@ -256,23 +295,34 @@ public partial class MainWindow : Window
             _deviceStateKnown = false;
             _configKnown = false;
             SetActionAvailability();
-            StatusText.Text = $"State refresh failed: {ex.Message}";
+            SetActivity($"State refresh failed: {ex.Message}", FAInfoBarSeverity.Error);
             return false;
         }
     }
 
     private void UpdateConnection(bool connected)
     {
-        ConnectionText.Text = connected ? "Connected" : "Disconnected — recovering";
-        ConnectionDot.Fill = connected ? Brushes.LimeGreen : Brushes.DarkOrange;
+        ConnectionInfoBar.IsOpen = !connected;
         _deviceStateKnown = false;
         _configKnown = false;
-        if (!connected)
-        {
-            StatusText.Text = "Core connection lost; retrying without replaying writes";
-        }
-
         SetActionAvailability();
+    }
+
+    private void SetActivity(string message, FAInfoBarSeverity severity, TimeSpan? expiration = null)
+    {
+        _notifications?.Show(new Notification
+        {
+            Title = "THRM",
+            Message = message,
+            Type = severity switch
+            {
+                FAInfoBarSeverity.Success => NotificationType.Success,
+                FAInfoBarSeverity.Warning => NotificationType.Warning,
+                FAInfoBarSeverity.Error => NotificationType.Error,
+                _ => NotificationType.Information,
+            },
+            Expiration = expiration ?? TimeSpan.FromSeconds(severity is FAInfoBarSeverity.Error or FAInfoBarSeverity.Warning ? 8 : 5),
+        });
     }
 
     private void ApplyConfig(ConfigSnapshot config)
@@ -290,7 +340,6 @@ public partial class MainWindow : Window
         }
 
         AutoControlSwitch.IsChecked = _autoControl;
-        AutoControlText.Text = _autoControl ? "Enabled" : "Disabled";
         SelectCoreValue(ManualGearComboBox, ManualGearValues, _manualGear);
         SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
         UpdateManualAppliedText();
@@ -300,13 +349,19 @@ public partial class MainWindow : Window
     {
         _deviceConnected = status.Connected;
         _deviceModel = status.Model;
-        DeviceText.Text = status.Connected ? "Connected" : "Disconnected";
-        ModelText.Text = $"Model {EmptyDash(status.Model)}";
-        ProductText.Text = $"Product ID {EmptyDash(status.ProductId)}";
-        ModeText.Text = $"Mode {EmptyDash(status.CurrentData?.WorkMode)}";
+        DeviceText.Text = status.Connected ? "Connected" : "Not connected";
+        DeviceStatusIcon.IconSource = new FluentIconSource
+        {
+            Icon = status.Connected
+                ? FluentIcons.Common.Icon.PlugConnected
+                : FluentIcons.Common.Icon.PlugDisconnected
+        };
+        ModelText.Text = EmptyDash(status.Model);
+        ProductText.Text = EmptyDash(status.ProductId);
+        ModeText.Text = EmptyDash(status.CurrentData?.WorkMode);
         if (status.CurrentData is null)
         {
-            FanText.Text = "Fan —";
+            FanText.Text = "—";
         }
         else
         {
@@ -333,7 +388,7 @@ public partial class MainWindow : Window
     }
 
     private void ApplyFanData(FanDataSnapshot fanData) =>
-        FanText.Text = $"Fan {fanData.CurrentRpm} RPM → {fanData.TargetRpm} RPM";
+        FanText.Text = $"{fanData.CurrentRpm} RPM → {fanData.TargetRpm} RPM";
 
     private void SetActionAvailability()
     {

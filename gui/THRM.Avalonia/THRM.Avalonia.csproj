@@ -10,7 +10,8 @@
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.1" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <PackageReference Include="Avalonia.Wayland" Version="12.1.1" />
+    <PackageReference Include="FluentAvaloniaUI" Version="3.0.2" />
+    <PackageReference Include="FluentIcons.Avalonia.Fluent" Version="2.1.333" />
   </ItemGroup>
 </Project>

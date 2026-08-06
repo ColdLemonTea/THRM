@@ -1,127 +1,484 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="using:System"
+        xmlns:animation="using:Avalonia.Animation"
+        xmlns:local="using:THRM.Avalonia"
+        xmlns:ui="using:FluentAvalonia.UI.Controls"
+        xmlns:icons="using:FluentIcons.Avalonia.Fluent"
         x:Class="THRM.Avalonia.MainWindow"
-        Title="THRM Avalonia POC"
-        Width="900"
-        Height="620"
+        Title="THRM"
+        Width="760"
+        Height="480"
         MinWidth="720"
-        MinHeight="500"
+        MinHeight="440"
         WindowStartupLocation="CenterScreen">
   <Window.Resources>
-    <SolidColorBrush x:Key="PageBrush" Color="#111318" />
-    <SolidColorBrush x:Key="CardBrush" Color="#1B1F27" />
-    <SolidColorBrush x:Key="MutedBrush" Color="#A9B1C0" />
-    <SolidColorBrush x:Key="AccentBrush" Color="#6EA8FE" />
+    <sys:TimeSpan x:Key="SplitViewPaneAnimationCloseDuration">00:00:00.167</sys:TimeSpan>
+
+    <ControlTheme x:Key="THRMSettingsExpanderExpanderTheme"
+                  TargetType="Expander">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="MinHeight" Value="{DynamicResource SettingsExpanderMinHeight}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ExpanderContentBorderBrush}" />
+      <Setter Property="BorderThickness" Value="{DynamicResource ExpanderContentDownBorderThickness}" />
+      <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <StackPanel>
+            <ToggleButton Name="ToggleButton"
+                          MinHeight="{TemplateBinding MinHeight}"
+                          IsEnabled="{TemplateBinding IsEnabled}"
+                          IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
+                          Content="{TemplateBinding Header}"
+                          Theme="{StaticResource SettingsExpanderToggleButtonStyle}" />
+
+            <local:AnimatedContentClip Name="ExpanderContentClip">
+              <local:AnimatedContentClip.Transitions>
+                <Transitions>
+                  <DoubleTransition Property="RevealProgress"
+                                    Duration="00:00:00.167"
+                                    Easing="0,0,0,1" />
+                </Transitions>
+              </local:AnimatedContentClip.Transitions>
+              <Border Name="ExpanderContent"
+                      Background="{TemplateBinding Background}"
+                      BorderBrush="{TemplateBinding BorderBrush}"
+                      BorderThickness="{TemplateBinding BorderThickness}"
+                      CornerRadius="{TemplateBinding CornerRadius, Converter={StaticResource BottomCornerRadiusFilterConverter}}"
+                      BackgroundSizing="InnerBorderEdge">
+                <ContentPresenter Name="PART_ContentPresenter"
+                                  Margin="{TemplateBinding Padding}"
+                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                  Content="{TemplateBinding Content}"
+                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+              </Border>
+            </local:AnimatedContentClip>
+          </StackPanel>
+        </ControlTemplate>
+      </Setter>
+
+      <Style Selector="^ /template/ local|AnimatedContentClip#ExpanderContentClip">
+        <Setter Property="RevealProgress" Value="0" />
+      </Style>
+      <Style Selector="^:expanded /template/ local|AnimatedContentClip#ExpanderContentClip">
+        <Setter Property="RevealProgress" Value="1" />
+      </Style>
+    </ControlTheme>
+
+    <ControlTheme x:Key="THRMSettingsExpanderTheme"
+                  TargetType="ui:FASettingsExpander"
+                  BasedOn="{StaticResource {x:Type ui:FASettingsExpander}}">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Expander Name="Expander"
+                    Theme="{StaticResource THRMSettingsExpanderExpanderTheme}"
+                    IsExpanded="{TemplateBinding IsExpanded, Mode=TwoWay}">
+            <Expander.Header>
+              <ui:FASettingsExpanderItem Content="{TemplateBinding Header}"
+                                         ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                         Description="{TemplateBinding Description}"
+                                         IsClickEnabled="{TemplateBinding IsClickEnabled}"
+                                         IconSource="{TemplateBinding IconSource}"
+                                         ActionIconSource="{TemplateBinding ActionIconSource}"
+                                         Footer="{TemplateBinding Footer}"
+                                         FooterTemplate="{TemplateBinding FooterTemplate}"
+                                         Padding="{DynamicResource SettingsExpanderPadding}"
+                                         Background="Transparent"
+                                         Name="ContentHost" />
+            </Expander.Header>
+
+            <ItemsPresenter ItemsPanel="{TemplateBinding ItemsPanel}" />
+          </Expander>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^ /template/ Expander#Expander">
+        <!-- The library helper translates then hides content; this host owns the layout reveal. -->
+        <Setter Property="ui:FAExpanderExt.ExpanderAnimationType" Value="{x:Null}" />
+      </Style>
+    </ControlTheme>
   </Window.Resources>
 
-  <Grid Background="{DynamicResource PageBrush}" RowDefinitions="Auto,*,Auto">
-    <Border Padding="28,24,28,16">
-      <Grid ColumnDefinitions="*,Auto">
-        <StackPanel Spacing="4">
-          <TextBlock Text="THRM" FontSize="28" FontWeight="Bold" />
-          <TextBlock Text="Avalonia vertical slice" Foreground="{DynamicResource MutedBrush}" />
-        </StackPanel>
-        <Border Grid.Column="1" Padding="12,7" CornerRadius="16" Background="{DynamicResource CardBrush}">
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <Ellipse x:Name="ConnectionDot" Width="10" Height="10" Fill="#F59E0B" VerticalAlignment="Center" />
-            <TextBlock x:Name="ConnectionText" Text="Connecting" VerticalAlignment="Center" />
-          </StackPanel>
-        </Border>
-      </Grid>
-    </Border>
+  <Grid Background="{DynamicResource ApplicationPageBackgroundThemeBrush}">
+    <ui:FANavigationView
+                         x:Name="NavigationView"
+                         PaneDisplayMode="LeftCompact"
+                         IsPaneOpen="False"
+                         PaneTitle="THRM"
+                         IsSettingsVisible="False"
+                         SelectionChanged="NavigationViewSelectionChanged">
+      <ui:FANavigationView.MenuItems>
+        <ui:FANavigationViewItem x:Name="StatusNavigationItem"
+                                 Content="Status"
+                                 Tag="status">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="Home" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="Fan control" Tag="fan-control">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="Temperature" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="Core &amp; device" Tag="core-device">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="PlugConnected" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+      </ui:FANavigationView.MenuItems>
+      <ui:FANavigationView.FooterMenuItems>
+        <ui:FANavigationViewItem Content="About" Tag="about">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="Info" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+      </ui:FANavigationView.FooterMenuItems>
+      <ui:FANavigationView.Content>
+        <Grid RowDefinitions="Auto,*">
+          <ui:FAInfoBar x:Name="ConnectionInfoBar"
+                        Margin="24,16,24,0"
+                        IsOpen="False"
+                        IsClosable="False"
+                        Severity="Warning"
+                        Title="THRM Core connection lost"
+                        Message="Retrying connection without replaying writes." />
+          <TransitioningContentControl x:Name="PageHost" Grid.Row="1" ClipToBounds="True">
+            <TransitioningContentControl.PageTransition>
+              <animation:CompositePageTransition>
+                <animation:CrossFade Duration="00:00:00.167"
+                                     FadeInEasing="0,0,0,1"
+                                     FadeOutEasing="1,1,0,1" />
+              </animation:CompositePageTransition>
+            </TransitioningContentControl.PageTransition>
+          </TransitioningContentControl>
+          <Grid x:Name="PageCache" Grid.Row="1" IsVisible="False">
+          <ScrollViewer x:Name="StatusPage"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="24">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Status" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Live connection, device and temperature overview."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
 
-    <ScrollViewer Grid.Row="1" Padding="28,4,28,20">
-      <StackPanel Spacing="16">
-        <Grid ColumnDefinitions="*,16,*">
-          <Border Background="{DynamicResource CardBrush}" CornerRadius="12" Padding="20">
-            <StackPanel Spacing="10">
-              <TextBlock Text="Device" FontSize="18" FontWeight="SemiBold" />
-              <TextBlock x:Name="DeviceText" Text="Disconnected" FontSize="24" FontWeight="Bold" />
-              <TextBlock x:Name="ModelText" Text="Model —" Foreground="{DynamicResource MutedBrush}" />
-              <TextBlock x:Name="ProductText" Text="Product ID —" Foreground="{DynamicResource MutedBrush}" />
-              <TextBlock x:Name="ModeText" Text="Mode —" Foreground="{DynamicResource MutedBrush}" />
-              <TextBlock x:Name="FanText" Text="Fan —" Foreground="{DynamicResource MutedBrush}" />
+              <Border Padding="20"
+                      Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                      BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                      BorderThickness="1"
+                      CornerRadius="8">
+                <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="20">
+                  <StackPanel Grid.Column="0" Spacing="12">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ui:FAIconSourceElement Width="20" Height="20" VerticalAlignment="Center">
+                          <ui:FAIconSourceElement.IconSource>
+                            <icons:FluentIconSource Icon="PlugConnected" />
+                          </ui:FAIconSourceElement.IconSource>
+                        </ui:FAIconSourceElement>
+                        <TextBlock Text="Device" FontSize="20" FontWeight="SemiBold" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1"
+                                  Orientation="Horizontal"
+                                  Spacing="6"
+                                  VerticalAlignment="Center">
+                        <ui:FAIconSourceElement x:Name="DeviceStatusIcon"
+                                                Width="16"
+                                                Height="16"
+                                                VerticalAlignment="Center">
+                          <ui:FAIconSourceElement.IconSource>
+                            <icons:FluentIconSource Icon="PlugDisconnected" />
+                          </ui:FAIconSourceElement.IconSource>
+                        </ui:FAIconSourceElement>
+                        <TextBlock x:Name="DeviceText"
+                                   Text="Not connected"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   HorizontalAlignment="Right" />
+                      </StackPanel>
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,*"
+                          RowDefinitions="Auto,Auto,Auto,Auto"
+                          ColumnSpacing="16"
+                          RowSpacing="8">
+                      <TextBlock Text="Model" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <TextBlock x:Name="ModelText"
+                                 Grid.Column="1"
+                                 Text="—"
+                                 HorizontalAlignment="Right" />
+                      <TextBlock Grid.Row="1"
+                                 Text="Product ID"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <TextBlock x:Name="ProductText"
+                                 Grid.Row="1"
+                                 Grid.Column="1"
+                                 Text="—"
+                                 HorizontalAlignment="Right" />
+                      <TextBlock Grid.Row="2"
+                                 Text="Mode"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <TextBlock x:Name="ModeText"
+                                 Grid.Row="2"
+                                 Grid.Column="1"
+                                 Text="—"
+                                 HorizontalAlignment="Right" />
+                      <TextBlock Grid.Row="3"
+                                 Text="Fan"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <TextBlock x:Name="FanText"
+                                 Grid.Row="3"
+                                 Grid.Column="1"
+                                 Text="—"
+                                 HorizontalAlignment="Right" />
+                    </Grid>
+                  </StackPanel>
+
+                  <Rectangle Grid.Column="1"
+                             Width="1"
+                             Margin="0,4"
+                             Fill="{DynamicResource DividerStrokeColorDefaultBrush}" />
+
+                  <StackPanel Grid.Column="2" Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <ui:FAIconSourceElement Width="20" Height="20" VerticalAlignment="Center">
+                        <ui:FAIconSourceElement.IconSource>
+                          <icons:FluentIconSource Icon="Temperature" />
+                        </ui:FAIconSourceElement.IconSource>
+                      </ui:FAIconSourceElement>
+                      <TextBlock Text="Temperature" FontSize="20" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <Grid ColumnDefinitions="Auto,*"
+                          RowDefinitions="Auto,Auto,Auto"
+                          ColumnSpacing="16"
+                          RowSpacing="8">
+                      <TextBlock Text="CPU" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <TextBlock x:Name="CpuTempText"
+                                 Grid.Column="1"
+                                 Text="—"
+                                 FontSize="20"
+                                 FontWeight="SemiBold"
+                                 HorizontalAlignment="Right" />
+                      <TextBlock Grid.Row="1"
+                                 Text="GPU"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <TextBlock x:Name="GpuTempText"
+                                 Grid.Row="1"
+                                 Grid.Column="1"
+                                 Text="—"
+                                 FontSize="20"
+                                 FontWeight="SemiBold"
+                                 HorizontalAlignment="Right" />
+                      <TextBlock Grid.Row="2"
+                                 Text="Max"
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <TextBlock x:Name="MaxTempText"
+                                 Grid.Row="2"
+                                 Grid.Column="1"
+                                 Text="—"
+                                 FontSize="20"
+                                 FontWeight="SemiBold"
+                                 HorizontalAlignment="Right" />
+                    </Grid>
+                    <TextBlock x:Name="BridgeText"
+                               Text="Temperature bridge —"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="LastUpdateText"
+                               Text="No state received"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                </Grid>
+              </Border>
+
             </StackPanel>
-          </Border>
-          <Border Grid.Column="2" Background="{DynamicResource CardBrush}" CornerRadius="12" Padding="20">
-            <StackPanel Spacing="10">
-              <TextBlock Text="Temperature" FontSize="18" FontWeight="SemiBold" />
-              <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
-                <TextBlock Text="CPU" Foreground="{DynamicResource MutedBrush}" />
-                <TextBlock Grid.Column="1" x:Name="CpuTempText" Text="—" HorizontalAlignment="Right" FontSize="22" FontWeight="Bold" />
-                <TextBlock Grid.Row="1" Text="GPU" Foreground="{DynamicResource MutedBrush}" />
-                <TextBlock Grid.Row="1" Grid.Column="1" x:Name="GpuTempText" Text="—" HorizontalAlignment="Right" FontSize="22" FontWeight="Bold" />
-                <TextBlock Grid.Row="2" Text="Max" Foreground="{DynamicResource MutedBrush}" />
-                <TextBlock Grid.Row="2" Grid.Column="1" x:Name="MaxTempText" Text="—" HorizontalAlignment="Right" FontSize="22" FontWeight="Bold" />
-              </Grid>
-              <TextBlock x:Name="BridgeText" Text="Temperature bridge —" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="FanControlPage"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Fan control" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Manage automatic and manual fan behavior through the connected THRM Core."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Fan behavior"
+                                     Description="Choose how THRM Core manages the device."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Temperature" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Automatic control"
+                                           Description="Let THRM Core manage the fan preset.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="AutoControlSwitch"
+                                  IsEnabled="False"
+                                  Click="AutoControlClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Manual fan control"
+                                     Description="Select a Core preset and apply it to the connected device."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Temperature" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Description="Select a preset.">
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                    <TextBlock Text="Gear preset" VerticalAlignment="Center" />
+                    <ComboBox x:Name="ManualGearComboBox"
+                              Grid.Column="1"
+                              HorizontalAlignment="Stretch"
+                              SelectedIndex="-1"
+                              IsEnabled="False"
+                              SelectionChanged="ManualSelectionChanged">
+                      <ComboBoxItem Content="Quiet" />
+                      <ComboBoxItem Content="Standard" />
+                      <ComboBoxItem Content="Strong" />
+                      <ComboBoxItem Content="Overclock" />
+                    </ComboBox>
+                  </Grid>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Select a level when supported.">
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                    <TextBlock x:Name="ManualLevelLabel"
+                               Text="Level"
+                               VerticalAlignment="Center" />
+                    <ComboBox x:Name="ManualLevelComboBox"
+                              Grid.Column="1"
+                              HorizontalAlignment="Stretch"
+                              SelectedIndex="-1"
+                              IsEnabled="False"
+                              SelectionChanged="ManualSelectionChanged">
+                      <ComboBoxItem Content="Low" />
+                      <ComboBoxItem Content="Medium" />
+                      <ComboBoxItem Content="High" />
+                    </ComboBox>
+                  </Grid>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Send the selected values to Core.">
+                  <Button x:Name="ApplyManualGearButton"
+                          Content="Apply"
+                          HorizontalAlignment="Right"
+                          Click="ApplyManualGearClick"
+                          IsEnabled="False" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Current selection and availability.">
+                  <StackPanel Spacing="4">
+                    <TextBlock x:Name="ManualAppliedText"
+                               Text="Applied preset: —"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <TextBlock x:Name="ManualControlAvailabilityText"
+                               Text="Manual control is waiting for synchronized Core state."
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="ManualLevelInfo"
+                               Text="BS1 uses fixed presets; level not applicable."
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               IsVisible="False" />
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
             </StackPanel>
-          </Border>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="CoreDevicePage"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Core &amp; device" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Manage the device connection and the running THRM Core session through the existing IPC actions."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Device connection"
+                                     Description="Connect or disconnect the currently detected device through THRM Core."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="PlugConnected" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Description="Use the available actions.">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="ConnectDeviceButton"
+                            Content="Connect device"
+                            Click="ConnectDeviceClick"
+                            IsEnabled="False" />
+                    <Button x:Name="DisconnectDeviceButton"
+                            Content="Disconnect device"
+                            Click="DisconnectDeviceClick"
+                            IsEnabled="False" />
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Core session"
+                                     Description="Refresh synchronized state or control the running THRM Core session."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="PlugConnected" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Description="Refresh state or show the Core window.">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Refresh" Click="RefreshClick" />
+                    <Button Content="Show window" Click="ShowWindowClick" />
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Quit the running THRM Core session.">
+                  <Button Content="Quit core"
+                          Click="QuitCoreClick"
+                          HorizontalAlignment="Right" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+            </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="AboutPage"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="About" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="This client is a migrated Avalonia IPC slice for THRM Core."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Migration scope"
+                                     Description="Current Avalonia coverage and remaining legacy features."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Info" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Description="Migrated IPC slice.">
+                  <TextBlock Text="Connection, fan control, and Core/device actions."
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Remaining legacy features.">
+                  <TextBlock Text="Fan curve and Noise test remain in the legacy Wails frontend."
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+            </StackPanel>
+          </ScrollViewer>
+          </Grid>
         </Grid>
+      </ui:FANavigationView.Content>
+    </ui:FANavigationView>
 
-        <Grid ColumnDefinitions="*,16,*">
-          <Border Background="{DynamicResource CardBrush}" CornerRadius="12" Padding="20">
-            <StackPanel Spacing="10">
-              <TextBlock Text="Core configuration" FontSize="18" FontWeight="SemiBold" />
-              <TextBlock Text="Choose whether THRM Core manages the device automatically." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <ToggleSwitch x:Name="AutoControlSwitch" Content="Auto control" IsEnabled="False" Click="AutoControlClick" />
-                <TextBlock x:Name="AutoControlText" Text="—" VerticalAlignment="Center" />
-              </StackPanel>
-              <Grid ColumnDefinitions="*,*" RowDefinitions="Auto" RowSpacing="10">
-                <TextBlock Text="Protocol" Foreground="{DynamicResource MutedBrush}" />
-                <TextBlock Grid.Column="1" Text="3.0 JSON-lines" HorizontalAlignment="Right" />
-              </Grid>
-            </StackPanel>
-          </Border>
-          <Border Grid.Column="2" Background="{DynamicResource CardBrush}" CornerRadius="12" Padding="20">
-            <StackPanel Spacing="10">
-              <TextBlock Text="IPC actions" FontSize="18" FontWeight="SemiBold" />
-              <TextBlock Text="Device commands are available after a synchronized device state." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="ConnectDeviceButton" Content="Connect device" Click="ConnectDeviceClick" IsEnabled="False" />
-                <Button x:Name="DisconnectDeviceButton" Content="Disconnect device" Click="DisconnectDeviceClick" IsEnabled="False" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="Refresh" Click="RefreshClick" />
-                <Button Content="Show window" Click="ShowWindowClick" />
-                <Button Content="Quit core" Click="QuitCoreClick" />
-              </StackPanel>
-              <TextBlock x:Name="StatusText" Text="Waiting for THRM Core" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
-            </StackPanel>
-          </Border>
-        </Grid>
-
-        <Border Background="{DynamicResource CardBrush}" CornerRadius="12" Padding="20">
-          <StackPanel Spacing="12">
-            <TextBlock Text="Manual fan control" FontSize="18" FontWeight="SemiBold" />
-            <TextBlock Text="Select a Core preset and apply it to the connected device. The labels are English; the existing Core protocol values are sent unchanged." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
-            <Grid ColumnDefinitions="Auto,16,180,16,Auto,16,180,16,Auto" RowDefinitions="Auto,Auto" RowSpacing="8">
-              <TextBlock Text="Gear preset" VerticalAlignment="Center" />
-              <ComboBox x:Name="ManualGearComboBox" Grid.Column="2" SelectedIndex="-1" IsEnabled="False" SelectionChanged="ManualSelectionChanged">
-                <ComboBoxItem Content="Quiet" />
-                <ComboBoxItem Content="Standard" />
-                <ComboBoxItem Content="Strong" />
-                <ComboBoxItem Content="Overclock" />
-              </ComboBox>
-              <TextBlock x:Name="ManualLevelLabel" Grid.Column="4" Text="Level" VerticalAlignment="Center" />
-              <ComboBox x:Name="ManualLevelComboBox" Grid.Column="6" SelectedIndex="-1" IsEnabled="False" SelectionChanged="ManualSelectionChanged">
-                <ComboBoxItem Content="Low" />
-                <ComboBoxItem Content="Medium" />
-                <ComboBoxItem Content="High" />
-              </ComboBox>
-              <Button x:Name="ApplyManualGearButton" Grid.Column="8" Content="Apply" Click="ApplyManualGearClick" IsEnabled="False" />
-              <TextBlock x:Name="ManualLevelInfo" Grid.Row="1" Grid.ColumnSpan="9" Text="BS1 uses fixed presets; level not applicable." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" IsVisible="False" />
-            </Grid>
-            <TextBlock x:Name="ManualAppliedText" Text="Applied preset: —" Foreground="{DynamicResource MutedBrush}" />
-            <TextBlock x:Name="ManualControlAvailabilityText" Text="Manual control is waiting for synchronized Core state." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" />
-          </StackPanel>
-        </Border>
-      </StackPanel>
-    </ScrollViewer>
-
-    <Border Grid.Row="2" Padding="28,10" Background="{DynamicResource CardBrush}">
-      <TextBlock x:Name="LastUpdateText" Text="No state received" Foreground="{DynamicResource MutedBrush}" />
-    </Border>
   </Grid>
 </Window>
