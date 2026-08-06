@@ -121,6 +121,11 @@
             <icons:FluentIconSource Icon="ChartMultiple" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="Temperature history" Tag="temperature-history">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="History" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
         <ui:FANavigationViewItem Content="Fan control" Tag="fan-control">
           <ui:FANavigationViewItem.IconSource>
             <icons:FluentIconSource Icon="Temperature" />
@@ -402,6 +407,100 @@
             </StackPanel>
           </ScrollViewer>
 
+          <ScrollViewer x:Name="TemperatureHistoryPage"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Temperature history" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Review the CPU and GPU temperatures recorded by THRM Core over time."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Recording"
+                                     Description="THRM Core keeps this history while the application window is closed."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="History" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpander.Footer>
+                  <Button x:Name="ReloadTemperatureHistoryButton"
+                          Content="Refresh"
+                          Click="ReloadTemperatureHistoryClick"
+                          IsEnabled="False" />
+                </ui:FASettingsExpander.Footer>
+                <ui:FASettingsExpanderItem Content="Background recording"
+                                           Description="Keep samples in the Core-managed history file.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="TemperatureHistoryEnabledSwitch"
+                                  IsEnabled="False"
+                                  Click="TemperatureHistoryEnabledClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Retention"
+                                           Description="Choose how long THRM Core retains recorded samples.">
+                  <ComboBox x:Name="TemperatureHistoryRetentionComboBox"
+                            HorizontalAlignment="Stretch"
+                            IsEnabled="False"
+                            SelectionChanged="TemperatureHistoryRetentionSelectionChanged">
+                    <ComboBoxItem Content="1 hour" />
+                    <ComboBoxItem Content="2 hours" />
+                    <ComboBoxItem Content="3 hours" />
+                    <ComboBoxItem Content="6 hours" />
+                    <ComboBoxItem Content="12 hours" />
+                    <ComboBoxItem Content="24 hours" />
+                  </ComboBox>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Current availability.">
+                  <TextBlock x:Name="TemperatureHistoryStateText"
+                             Text="Waiting for THRM Core."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Recent trend"
+                                     Description="The chart shows recorded CPU and GPU temperatures."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="DataLine" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Description="Samples are shown in chronological order from the selected retention window.">
+                  <local:TemperatureHistoryPreview x:Name="TemperatureHistoryPreview"
+                                                   Height="260"
+                                                   HorizontalAlignment="Stretch" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="CPU temperature" Description="Peak and average across the current window.">
+                  <TextBlock x:Name="TemperatureHistoryCpuSummaryText"
+                             Text="No recorded CPU temperatures."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="GPU temperature" Description="Peak and average across the current window.">
+                  <TextBlock x:Name="TemperatureHistoryGpuSummaryText"
+                             Text="No recorded GPU temperatures."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Device fan" Description="Peak and average fan speed across the current window.">
+                  <TextBlock x:Name="TemperatureHistoryFanSummaryText"
+                             Text="No recorded fan speeds."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Last sample" Description="Latest timestamp received from THRM Core.">
+                  <TextBlock x:Name="TemperatureHistoryLastSampleText"
+                             Text="No recorded samples."
+                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+            </StackPanel>
+          </ScrollViewer>
+
           <ScrollViewer x:Name="FanControlPage"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -668,11 +767,11 @@
                   <icons:FluentIconSource Icon="Info" />
                 </ui:FASettingsExpander.IconSource>
                 <ui:FASettingsExpanderItem Description="Migrated IPC slice.">
-                  <TextBlock Text="Connection, fan curve editing, fan control, device settings, and Core actions."
+                  <TextBlock Text="Connection, fan curve editing, temperature history, fan control, device settings, and Core actions."
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Remaining legacy features.">
-                  <TextBlock Text="Curve profile management, noise calibration, temperature history, lighting, and system settings remain in the legacy Wails frontend."
+                  <TextBlock Text="Curve profile management, timeline markers, noise calibration, lighting, sensor selection, and system settings remain in the legacy Wails frontend."
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>

@@ -129,6 +129,9 @@ public sealed class ThrmIpcClient : IDisposable
     public Task<FanCurveProfilesSnapshot> GetFanCurveProfilesAsync(CancellationToken cancellationToken = default) =>
         SendRequestAsync<FanCurveProfilesSnapshot>("GetFanCurveProfiles", null, cancellationToken);
 
+    public Task<TemperatureHistorySnapshot> GetTemperatureHistoryAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<TemperatureHistorySnapshot>("GetTemperatureHistory", null, cancellationToken);
+
     public Task<bool> ShowWindowAsync(CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("ShowWindow", null, cancellationToken);
 
@@ -158,6 +161,12 @@ public sealed class ThrmIpcClient : IDisposable
 
     public Task<bool> SetSmartStartStopAsync(string value, CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("SetSmartStartStop", new { value }, cancellationToken);
+
+    public Task<bool> SetTemperatureHistoryEnabledAsync(bool enabled, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetTemperatureHistoryEnabled", new { enabled }, cancellationToken);
+
+    public Task<bool> SetTemperatureHistoryRetentionHoursAsync(int value, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetTemperatureHistoryRetentionHours", new { value }, cancellationToken);
 
     public Task<bool> SetFanCurveAsync(IReadOnlyList<FanCurvePoint> curve, CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("SetFanCurve", curve, cancellationToken);
@@ -629,6 +638,34 @@ public sealed class TemperatureSnapshot
     [JsonPropertyName("bridgeMessage")] public string? BridgeMessage { get; init; }
 }
 
+public sealed class TemperatureHistorySnapshot
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; init; }
+    [JsonPropertyName("sampleIntervalSeconds")] public int SampleIntervalSeconds { get; init; }
+    [JsonPropertyName("retentionHours")] public int RetentionHours { get; init; }
+    [JsonPropertyName("points")] public List<TemperatureHistoryPointSnapshot> Points { get; init; } = [];
+    [JsonPropertyName("events")] public List<TimelineEventSnapshot> Events { get; init; } = [];
+}
+
+public sealed class TemperatureHistoryPointSnapshot
+{
+    [JsonPropertyName("timestamp")] public long Timestamp { get; init; }
+    [JsonPropertyName("cpuTemp")] public int CpuTemp { get; init; }
+    [JsonPropertyName("gpuTemp")] public int GpuTemp { get; init; }
+    [JsonPropertyName("cpuPower")] public double CpuPower { get; init; }
+    [JsonPropertyName("gpuPower")] public double GpuPower { get; init; }
+    [JsonPropertyName("fanRpm")] public int FanRpm { get; init; }
+    [JsonPropertyName("cpuFanRpm")] public int CpuFanRpm { get; init; }
+    [JsonPropertyName("gpuFanRpm")] public int GpuFanRpm { get; init; }
+}
+
+public sealed class TimelineEventSnapshot
+{
+    [JsonPropertyName("timestamp")] public long Timestamp { get; init; }
+    [JsonPropertyName("type")] public string Type { get; init; } = string.Empty;
+    [JsonPropertyName("labelKey")] public string LabelKey { get; init; } = string.Empty;
+}
+
 internal static class IpcProtocolSelfCheck
 {
     public static void Run()
@@ -729,6 +766,33 @@ internal static class IpcProtocolSelfCheck
             || saveProfileData.GetProperty("curve").GetArrayLength() != 2)
         {
             throw new InvalidOperationException("SaveFanCurveProfile request check failed.");
+        }
+
+        using var temperatureHistoryRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("GetTemperatureHistory", null, "self-check-temperature-history"));
+        if (temperatureHistoryRequest.RootElement.GetProperty("type").GetString() != "GetTemperatureHistory"
+            || temperatureHistoryRequest.RootElement.TryGetProperty("data", out var temperatureHistoryData)
+                && temperatureHistoryData.ValueKind != JsonValueKind.Null)
+        {
+            throw new InvalidOperationException("GetTemperatureHistory request check failed.");
+        }
+
+        using var temperatureHistoryEnabledRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetTemperatureHistoryEnabled", new { enabled = true }, "self-check-temperature-history-enabled"));
+        var temperatureHistoryEnabledData = temperatureHistoryEnabledRequest.RootElement.GetProperty("data");
+        if (temperatureHistoryEnabledRequest.RootElement.GetProperty("type").GetString() != "SetTemperatureHistoryEnabled"
+            || temperatureHistoryEnabledData.GetProperty("enabled").ValueKind != JsonValueKind.True)
+        {
+            throw new InvalidOperationException("SetTemperatureHistoryEnabled request check failed.");
+        }
+
+        using var temperatureHistoryRetentionRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetTemperatureHistoryRetentionHours", new { value = 12 }, "self-check-temperature-history-retention"));
+        var temperatureHistoryRetentionData = temperatureHistoryRetentionRequest.RootElement.GetProperty("data");
+        if (temperatureHistoryRetentionRequest.RootElement.GetProperty("type").GetString() != "SetTemperatureHistoryRetentionHours"
+            || temperatureHistoryRetentionData.GetProperty("value").GetInt32() != 12)
+        {
+            throw new InvalidOperationException("SetTemperatureHistoryRetentionHours request check failed.");
         }
 
         var response = JsonSerializer.Deserialize<IpcMessage>(

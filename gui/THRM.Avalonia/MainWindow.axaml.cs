@@ -35,10 +35,17 @@ public partial class MainWindow : Window
     private string? _activeFanCurveProfileId;
     private bool _fanCurveKnown;
     private bool _fanCurveLoading;
+    private readonly List<TemperatureHistoryPointSnapshot> _temperatureHistory = [];
+    private bool _temperatureHistoryKnown;
+    private bool _temperatureHistoryLoading;
+    private bool _temperatureHistoryEnabled;
+    private int _temperatureHistoryRetentionHours = 1;
+    private bool _updatingTemperatureHistoryControls;
 
     private static readonly string[] ManualGearValues = ["静音", "标准", "强劲", "超频"];
     private static readonly string[] ManualLevelValues = ["低", "中", "高"];
     private static readonly string[] SmartStartStopValues = ["off", "immediate", "delayed"];
+    private static readonly int[] TemperatureHistoryRetentionOptions = [1, 2, 3, 6, 12, 24];
 
     public MainWindow()
     {
@@ -64,6 +71,7 @@ public partial class MainWindow : Window
         {
             "status" => StatusPage,
             "fan-curve" => FanCurvePage,
+            "temperature-history" => TemperatureHistoryPage,
             "fan-control" => FanControlPage,
             "device-settings" => DeviceSettingsPage,
             "core" => CorePage,
@@ -81,6 +89,11 @@ public partial class MainWindow : Window
         if (ReferenceEquals(nextPage, FanCurvePage))
         {
             _ = RefreshFanCurveAsync();
+        }
+
+        if (ReferenceEquals(nextPage, TemperatureHistoryPage))
+        {
+            _ = RefreshTemperatureHistoryAsync();
         }
     }
 
@@ -126,6 +139,11 @@ public partial class MainWindow : Window
                 {
                     _ = RefreshFanCurveAsync();
                 }
+
+                if (ReferenceEquals(_currentPage, TemperatureHistoryPage))
+                {
+                    _ = RefreshTemperatureHistoryAsync();
+                }
             }
         });
     }
@@ -150,6 +168,12 @@ public partial class MainWindow : Window
                 if (e.TryGetData<FanDataSnapshot>(out var fanData) && fanData is not null)
                 {
                     Dispatcher.UIThread.Post(() => ApplyFanData(fanData));
+                }
+                break;
+            case "temperature-history-update":
+                if (e.TryGetData<TemperatureHistoryPointSnapshot>(out var historyPoint) && historyPoint is not null)
+                {
+                    Dispatcher.UIThread.Post(() => AppendTemperatureHistoryPoint(historyPoint));
                 }
                 break;
             case "device-connected":
@@ -305,6 +329,60 @@ public partial class MainWindow : Window
     private void ManualSelectionChanged(object? sender, SelectionChangedEventArgs e) => SetActionAvailability();
 
     private async void ReloadFanCurveClick(object? sender, RoutedEventArgs e) => await RefreshFanCurveAsync();
+
+    private async void ReloadTemperatureHistoryClick(object? sender, RoutedEventArgs e) => await RefreshTemperatureHistoryAsync();
+
+    private async void TemperatureHistoryEnabledClick(object? sender, RoutedEventArgs e)
+    {
+        if (_temperatureHistoryLoading || _writeInProgress || !_ipc.IsConnected || !_temperatureHistoryKnown)
+        {
+            TemperatureHistoryEnabledSwitch.IsChecked = _temperatureHistoryEnabled;
+            return;
+        }
+
+        var enabled = TemperatureHistoryEnabledSwitch.IsChecked == true;
+        TemperatureHistoryEnabledSwitch.IsChecked = _temperatureHistoryEnabled;
+        if (await RunWriteAsync(
+                enabled ? "Enable temperature history" : "Disable temperature history",
+                () => _ipc.SetTemperatureHistoryEnabledAsync(enabled, _lifetime.Token)))
+        {
+            await RefreshTemperatureHistoryAsync();
+        }
+    }
+
+    private async void TemperatureHistoryRetentionSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingTemperatureHistoryControls
+            || _temperatureHistoryLoading
+            || _writeInProgress
+            || !_ipc.IsConnected
+            || !_temperatureHistoryKnown)
+        {
+            SelectTemperatureHistoryRetention();
+            return;
+        }
+
+        var index = TemperatureHistoryRetentionComboBox.SelectedIndex;
+        if (index < 0 || index >= TemperatureHistoryRetentionOptions.Length)
+        {
+            SelectTemperatureHistoryRetention();
+            return;
+        }
+
+        var hours = TemperatureHistoryRetentionOptions[index];
+        if (hours == _temperatureHistoryRetentionHours)
+        {
+            return;
+        }
+
+        SelectTemperatureHistoryRetention();
+        if (await RunWriteAsync(
+                "Set temperature history retention",
+                () => _ipc.SetTemperatureHistoryRetentionHoursAsync(hours, _lifetime.Token)))
+        {
+            await RefreshTemperatureHistoryAsync();
+        }
+    }
 
     private async void FanCurveProfileSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
@@ -482,9 +560,11 @@ public partial class MainWindow : Window
         _deviceStateKnown = false;
         _configKnown = false;
         _fanCurveKnown = connected && _fanCurveKnown;
+        _temperatureHistoryKnown = connected && _temperatureHistoryKnown;
         if (!connected)
         {
             FanCurveStateText.Text = "Fan curve editing unavailable: THRM Core is not connected.";
+            TemperatureHistoryStateText.Text = "Temperature history unavailable: THRM Core is not connected.";
         }
         SetActionAvailability();
     }
@@ -626,6 +706,14 @@ public partial class MainWindow : Window
         SaveFanCurveProfileButton.IsEnabled = canEditFanCurve;
         ReloadFanCurveButton.IsEnabled = _ipc.IsConnected && !_fanCurveLoading && !_writeInProgress;
         ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurveEditors.Count >= 2;
+
+        var canManageTemperatureHistory = _ipc.IsConnected
+            && _temperatureHistoryKnown
+            && !_temperatureHistoryLoading
+            && !_writeInProgress;
+        TemperatureHistoryEnabledSwitch.IsEnabled = canManageTemperatureHistory;
+        TemperatureHistoryRetentionComboBox.IsEnabled = canManageTemperatureHistory;
+        ReloadTemperatureHistoryButton.IsEnabled = _ipc.IsConnected && !_temperatureHistoryLoading && !_writeInProgress;
     }
 
     private async Task RefreshFanCurveAsync()
@@ -663,6 +751,158 @@ public partial class MainWindow : Window
             _fanCurveLoading = false;
             SetActionAvailability();
         }
+    }
+
+    private async Task RefreshTemperatureHistoryAsync()
+    {
+        if (_temperatureHistoryLoading)
+        {
+            return;
+        }
+
+        if (!_ipc.IsConnected)
+        {
+            _temperatureHistoryKnown = false;
+            TemperatureHistoryStateText.Text = "Temperature history unavailable: THRM Core is not connected.";
+            SetActionAvailability();
+            return;
+        }
+
+        _temperatureHistoryLoading = true;
+        TemperatureHistoryStateText.Text = "Loading temperature history from THRM Core...";
+        SetActionAvailability();
+        try
+        {
+            ApplyTemperatureHistory(await _ipc.GetTemperatureHistoryAsync(_lifetime.Token));
+        }
+        catch (Exception ex)
+        {
+            _temperatureHistoryKnown = false;
+            TemperatureHistoryStateText.Text = "Temperature history could not be loaded; known samples were retained.";
+            SetActivity($"Temperature history refresh failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _temperatureHistoryLoading = false;
+            SetActionAvailability();
+        }
+    }
+
+    private void ApplyTemperatureHistory(TemperatureHistorySnapshot history)
+    {
+        _updatingTemperatureHistoryControls = true;
+        try
+        {
+            _temperatureHistory.Clear();
+            _temperatureHistory.AddRange(history.Points.OrderBy(point => point.Timestamp));
+            _temperatureHistoryEnabled = history.Enabled;
+            _temperatureHistoryRetentionHours = Math.Clamp(history.RetentionHours, 1, 24);
+            _temperatureHistoryKnown = true;
+            TemperatureHistoryEnabledSwitch.IsChecked = _temperatureHistoryEnabled;
+            SelectTemperatureHistoryRetention();
+            TemperatureHistoryPreview.Points = _temperatureHistory.ToArray();
+            UpdateTemperatureHistorySummary();
+            UpdateTemperatureHistoryStateText();
+        }
+        finally
+        {
+            _updatingTemperatureHistoryControls = false;
+        }
+    }
+
+    private void AppendTemperatureHistoryPoint(TemperatureHistoryPointSnapshot point)
+    {
+        if (!_temperatureHistoryKnown || point.Timestamp <= 0)
+        {
+            return;
+        }
+
+        if (_temperatureHistory.Count > 0 && point.Timestamp <= _temperatureHistory[^1].Timestamp)
+        {
+            if (point.Timestamp == _temperatureHistory[^1].Timestamp)
+            {
+                _temperatureHistory[^1] = point;
+            }
+            else
+            {
+                return;
+            }
+        }
+        else
+        {
+            _temperatureHistory.Add(point);
+        }
+
+        var cutoff = point.Timestamp - (long)TimeSpan.FromHours(_temperatureHistoryRetentionHours).TotalMilliseconds;
+        while (_temperatureHistory.Count > 0 && _temperatureHistory[0].Timestamp < cutoff)
+        {
+            _temperatureHistory.RemoveAt(0);
+        }
+
+        TemperatureHistoryPreview.Points = _temperatureHistory.ToArray();
+        UpdateTemperatureHistorySummary();
+        UpdateTemperatureHistoryStateText();
+    }
+
+    private void SelectTemperatureHistoryRetention()
+    {
+        var index = Array.IndexOf(TemperatureHistoryRetentionOptions, _temperatureHistoryRetentionHours);
+        if (TemperatureHistoryRetentionComboBox.SelectedIndex == index)
+        {
+            return;
+        }
+
+        var wasUpdating = _updatingTemperatureHistoryControls;
+        _updatingTemperatureHistoryControls = true;
+        try
+        {
+            TemperatureHistoryRetentionComboBox.SelectedIndex = index;
+        }
+        finally
+        {
+            _updatingTemperatureHistoryControls = wasUpdating;
+        }
+    }
+
+    private void UpdateTemperatureHistoryStateText()
+    {
+        if (!_temperatureHistoryEnabled)
+        {
+            TemperatureHistoryStateText.Text = "Background recording is off; THRM Core is not retaining new samples.";
+            return;
+        }
+
+        var hourLabel = _temperatureHistoryRetentionHours == 1 ? "hour" : "hours";
+        TemperatureHistoryStateText.Text = $"Recording is on. {_temperatureHistory.Count:N0} samples are available from the last {_temperatureHistoryRetentionHours} {hourLabel}.";
+    }
+
+    private void UpdateTemperatureHistorySummary()
+    {
+        TemperatureHistoryCpuSummaryText.Text = BuildTemperatureHistorySummary(
+            _temperatureHistory.Select(point => point.CpuTemp), "°C", "CPU temperatures");
+        TemperatureHistoryGpuSummaryText.Text = BuildTemperatureHistorySummary(
+            _temperatureHistory.Select(point => point.GpuTemp), "°C", "GPU temperatures");
+        TemperatureHistoryFanSummaryText.Text = BuildTemperatureHistorySummary(
+            _temperatureHistory.Select(point => point.FanRpm), "RPM", "fan speeds");
+
+        if (_temperatureHistory.Count == 0)
+        {
+            TemperatureHistoryLastSampleText.Text = "No recorded samples.";
+            return;
+        }
+
+        var last = _temperatureHistory[^1];
+        TemperatureHistoryLastSampleText.Text = last.Timestamp > 0
+            ? $"{DateTimeOffset.FromUnixTimeMilliseconds(last.Timestamp).ToLocalTime():g}"
+            : "Timestamp unavailable.";
+    }
+
+    private static string BuildTemperatureHistorySummary(IEnumerable<int> values, string unit, string emptyLabel)
+    {
+        var samples = values.Where(value => value > 0).ToArray();
+        return samples.Length == 0
+            ? $"No recorded {emptyLabel}."
+            : $"Peak {samples.Max():N0} {unit}; average {samples.Average():N0} {unit}.";
     }
 
     private void ApplyFanCurve(IReadOnlyList<FanCurvePoint> curve, FanCurveProfilesSnapshot profiles)
