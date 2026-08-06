@@ -609,6 +609,14 @@ public sealed class ConfigSnapshot
     [JsonPropertyName("gearLight")] public bool GearLight { get; init; }
     [JsonPropertyName("powerOnStart")] public bool PowerOnStart { get; init; }
     [JsonPropertyName("smartStartStop")] public string? SmartStartStop { get; init; }
+    [JsonPropertyName("smartControl")] public SmartControlSnapshot? SmartControl { get; init; }
+}
+
+public sealed class SmartControlSnapshot
+{
+    [JsonPropertyName("learning")] public bool Learning { get; init; }
+    [JsonPropertyName("learningBias")] public string? LearningBias { get; init; }
+    [JsonPropertyName("learnedOffsets")] public List<int> LearnedOffsets { get; init; } = [];
 }
 
 public sealed class DeviceStatusSnapshot
@@ -865,6 +873,15 @@ internal static class IpcProtocolSelfCheck
         if (response is null || !response.IsResponse || !response.Success || response.Data?.GetString() != "pong")
         {
             throw new InvalidOperationException("Response parsing check failed.");
+        }
+
+        var config = JsonSerializer.Deserialize<ConfigSnapshot>(
+            "{\"autoControl\":true,\"smartControl\":{\"learning\":true,\"learningBias\":\"cooling\",\"learnedOffsets\":[0,150,-50]}}",
+            ThrmIpcClient.JsonOptions);
+        if (config?.SmartControl is not { Learning: true, LearningBias: "cooling" } smartControl
+            || !smartControl.LearnedOffsets.SequenceEqual(new[] { 0, 150, -50 }))
+        {
+            throw new InvalidOperationException("Smart control config decoding check failed.");
         }
 
         var @event = JsonSerializer.Deserialize<IpcMessage>(

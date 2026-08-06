@@ -32,11 +32,14 @@ public partial class MainWindow : Window
     private string? _manualGear;
     private string? _manualLevel;
     private Control? _currentPage;
-    private readonly List<(FANumberBox Temperature, FANumberBox Rpm)> _fanCurveEditors = [];
+    private readonly List<FanCurvePoint> _fanCurve = [];
     private readonly List<FanCurveProfileSnapshot> _fanCurveProfiles = [];
     private string? _activeFanCurveProfileId;
     private bool _fanCurveKnown;
     private bool _fanCurveLoading;
+    private bool _fanCurveLearningEnabled;
+    private string _fanCurveLearningBias = "balanced";
+    private readonly List<int> _learnedFanCurveOffsets = [];
     private readonly List<TemperatureHistoryPointSnapshot> _temperatureHistory = [];
     private bool _temperatureHistoryKnown;
     private bool _temperatureHistoryLoading;
@@ -58,6 +61,7 @@ public partial class MainWindow : Window
         NavigationView.SelectedItem = StatusNavigationItem;
         _ipc.ConnectionChanged += IpcConnectionChanged;
         _ipc.EventReceived += CoreEventReceived;
+        FanCurvePreview.PointDragged += FanCurvePreviewPointDragged;
         Opened += WindowOpened;
         Closing += WindowClosing;
     }
@@ -730,6 +734,10 @@ public partial class MainWindow : Window
             _gearLight = config.GearLight;
             _powerOnStart = config.PowerOnStart;
             _smartStartStop = SmartStartStopValues.Contains(config.SmartStartStop) ? config.SmartStartStop! : "off";
+            _fanCurveLearningEnabled = config.SmartControl?.Learning == true;
+            _fanCurveLearningBias = config.SmartControl?.LearningBias ?? "balanced";
+            _learnedFanCurveOffsets.Clear();
+            _learnedFanCurveOffsets.AddRange(config.SmartControl?.LearnedOffsets ?? []);
             if (!string.IsNullOrWhiteSpace(config.ManualGear))
             {
                 _manualGear = config.ManualGear;
@@ -749,6 +757,7 @@ public partial class MainWindow : Window
             SelectCoreValue(ManualGearComboBox, ManualGearValues, _manualGear);
             SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
             UpdateManualAppliedText();
+            UpdateFanCurvePreview();
         }
         finally
         {
@@ -848,7 +857,8 @@ public partial class MainWindow : Window
             && _fanCurveProfiles.Count > 1;
         ResetLearnedOffsetsButton.IsEnabled = canEditFanCurve;
         ReloadFanCurveButton.IsEnabled = _ipc.IsConnected && !_fanCurveLoading && !_writeInProgress;
-        ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurveEditors.Count >= 2;
+        ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurve.Count >= 2;
+        FanCurvePreview.IsEditable = canEditFanCurve;
 
         var canManageTemperatureHistory = _ipc.IsConnected
             && _temperatureHistoryKnown
@@ -878,7 +888,7 @@ public partial class MainWindow : Window
             var profilesTask = _ipc.GetFanCurveProfilesAsync(_lifetime.Token);
             await Task.WhenAll(curveTask, profilesTask);
             ApplyFanCurve(curveTask.Result, profilesTask.Result);
-            _fanCurveKnown = _fanCurveEditors.Count >= 2;
+            _fanCurveKnown = _fanCurve.Count >= 2;
             FanCurveStateText.Text = _fanCurveKnown
                 ? "Active curve loaded from THRM Core."
                 : "THRM Core returned an incomplete curve.";
@@ -1061,45 +1071,12 @@ public partial class MainWindow : Window
             FanCurveProfileComboBox.SelectedItem = activeProfile;
             FanCurveProfileNameTextBox.Text = activeProfile?.Name ?? string.Empty;
 
-            _fanCurveEditors.Clear();
-            FanCurvePointsPanel.Children.Clear();
-            for (var index = 0; index < curve.Count; index++)
+            _fanCurve.Clear();
+            _fanCurve.AddRange(curve.Select(point => new FanCurvePoint
             {
-                var temperature = new FANumberBox
-                {
-                    Minimum = 0,
-                    Maximum = 110,
-                    SmallChange = 1,
-                    SpinButtonPlacementMode = FANumberBoxSpinButtonPlacementMode.Compact,
-                    Value = curve[index].Temperature,
-                };
-                var rpm = new FANumberBox
-                {
-                    Minimum = 0,
-                    Maximum = 4000,
-                    SmallChange = 100,
-                    SpinButtonPlacementMode = FANumberBoxSpinButtonPlacementMode.Compact,
-                    Value = curve[index].Rpm,
-                };
-                var row = new Grid
-                {
-                    ColumnDefinitions = new ColumnDefinitions("44,*,*"),
-                    ColumnSpacing = 12,
-                };
-                row.Children.Add(new TextBlock
-                {
-                    Text = (index + 1).ToString(),
-                    VerticalAlignment = VerticalAlignment.Center,
-                });
-                row.Children.Add(temperature);
-                row.Children.Add(rpm);
-                Grid.SetColumn(temperature, 1);
-                Grid.SetColumn(rpm, 2);
-                FanCurvePointsPanel.Children.Add(row);
-                _fanCurveEditors.Add((temperature, rpm));
-                temperature.PropertyChanged += FanCurveEditorPropertyChanged;
-                rpm.PropertyChanged += FanCurveEditorPropertyChanged;
-            }
+                Temperature = point.Temperature,
+                Rpm = point.Rpm,
+            }));
 
             UpdateFanCurvePreview();
         }
@@ -1109,24 +1086,54 @@ public partial class MainWindow : Window
         }
     }
 
-    private void FanCurveEditorPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    private void FanCurvePreviewPointDragged(object? sender, FanCurvePointDragEventArgs e)
     {
-        if (e.Property == FANumberBox.ValueProperty)
+        if (!CanEditFanCurve || e.Index < 0 || e.Index >= _fanCurve.Count)
         {
-            UpdateFanCurvePreview();
+            return;
         }
+
+        var adjusted = FanCurveEdit.SetRpm(_fanCurve, e.Index, e.Rpm);
+        _fanCurve.Clear();
+        _fanCurve.AddRange(adjusted);
+        UpdateFanCurvePreview();
     }
 
     private void UpdateFanCurvePreview()
     {
-        FanCurvePreview.Points = _fanCurveEditors
-            .Select(editor => new FanCurvePoint
-            {
-                Temperature = double.IsFinite(editor.Temperature.Value) ? (int)Math.Round(editor.Temperature.Value) : 0,
-                Rpm = double.IsFinite(editor.Rpm.Value) ? (int)Math.Round(editor.Rpm.Value) : 0,
-            })
-            .ToArray();
+        FanCurvePreview.Points = _fanCurve.ToArray();
+        FanCurvePreview.LearnedPoints = BuildLearnedFanCurve();
     }
+
+    private IReadOnlyList<FanCurvePoint>? BuildLearnedFanCurve()
+    {
+        if (!_autoControl || !_fanCurveLearningEnabled || _fanCurve.Count == 0)
+        {
+            return null;
+        }
+
+        var offsets = _fanCurve.Select((_, index) => ConstrainLearnedOffset(
+            index < _learnedFanCurveOffsets.Count ? _learnedFanCurveOffsets[index] : 0)).ToArray();
+        if (!offsets.Any(offset => offset != 0))
+        {
+            return null;
+        }
+
+        var minimum = _fanCurve.Min(point => point.Rpm);
+        var maximum = _fanCurve.Max(point => point.Rpm);
+        return _fanCurve.Select((point, index) => new FanCurvePoint
+        {
+            Temperature = point.Temperature,
+            Rpm = Math.Clamp(point.Rpm + offsets[index], minimum, maximum),
+        }).ToArray();
+    }
+
+    private int ConstrainLearnedOffset(int offset) => _fanCurveLearningBias switch
+    {
+        "cooling" when offset < 0 => 0,
+        "quiet" when offset > 0 => 0,
+        _ => offset,
+    };
 
     private bool CanEditFanCurve =>
         _ipc.IsConnected && _fanCurveKnown && !_fanCurveLoading && !_writeInProgress;
@@ -1175,29 +1182,15 @@ public partial class MainWindow : Window
     private bool TryReadFanCurve(out List<FanCurvePoint> curve, out string error)
     {
         curve = [];
-        if (_fanCurveEditors.Count < 2)
+        if (_fanCurve.Count < 2)
         {
             error = "A fan curve needs at least two points.";
             return false;
         }
 
-        for (var index = 0; index < _fanCurveEditors.Count; index++)
+        for (var index = 0; index < _fanCurve.Count; index++)
         {
-            var temperatureValue = _fanCurveEditors[index].Temperature.Value;
-            var rpmValue = _fanCurveEditors[index].Rpm.Value;
-            if (!double.IsFinite(temperatureValue) || !double.IsFinite(rpmValue)
-                || temperatureValue != Math.Truncate(temperatureValue)
-                || rpmValue != Math.Truncate(rpmValue))
-            {
-                error = $"Point {index + 1} must use whole-number temperature and speed values.";
-                return false;
-            }
-
-            var point = new FanCurvePoint
-            {
-                Temperature = (int)temperatureValue,
-                Rpm = (int)rpmValue,
-            };
+            var point = _fanCurve[index];
             if (point.Temperature is < 0 or > 110 || point.Rpm is < 0 or > 4000)
             {
                 error = $"Point {index + 1} is outside the supported range.";

@@ -98,7 +98,22 @@
         <Setter Property="ui:FAExpanderExt.ExpanderAnimationType" Value="{x:Null}" />
       </Style>
     </ControlTheme>
+
   </Window.Resources>
+
+  <Window.Styles>
+    <Style Selector="ScrollViewer.page-scroll">
+      <Setter Property="IsScrollChainingEnabled" Value="True" />
+      <Setter Property="IsScrollInertiaEnabled" Value="True" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <animation:VectorTransition Property="Offset"
+                                      Duration="00:00:00.167"
+                                      Easing="0,0,0,1" />
+        </Transitions>
+      </Setter>
+    </Style>
+  </Window.Styles>
 
   <Grid Background="{DynamicResource ApplicationPageBackgroundThemeBrush}">
     <ui:FANavigationView
@@ -169,6 +184,7 @@
           </TransitioningContentControl>
           <Grid x:Name="PageCache" Grid.Row="1" IsVisible="False">
           <ScrollViewer x:Name="StatusPage"
+                        Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="24">
@@ -313,6 +329,7 @@
           </ScrollViewer>
 
           <ScrollViewer x:Name="FanCurvePage"
+                        Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">
@@ -413,43 +430,27 @@
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="DataLine" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Content="Curve preview"
-                                           Description="Read-only preview of the active curve. Edit values below to update it.">
+                <ui:FASettingsExpanderItem Content="Interactive curve"
+                                           Description="Drag a point vertically to set its target speed. Changes are applied to THRM Core only when you select Apply changes.">
                   <local:FanCurvePreview x:Name="FanCurvePreview"
-                                         Height="240"
-                                         HorizontalAlignment="Stretch" />
+                                          Height="320"
+                                          HorizontalAlignment="Stretch" />
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Edit the active profile, then apply the complete curve.">
-                  <StackPanel Spacing="12">
-                    <Grid ColumnDefinitions="44,*,*" ColumnSpacing="12">
-                      <TextBlock Text="Point"
-                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                 FontSize="12" />
-                      <TextBlock Grid.Column="1"
-                                 Text="Temperature (°C)"
-                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                 FontSize="12" />
-                      <TextBlock Grid.Column="2"
-                                 Text="Target speed (RPM)"
-                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                 FontSize="12" />
-                    </Grid>
-                    <StackPanel x:Name="FanCurvePointsPanel" Spacing="8" />
-                    <StackPanel Orientation="Horizontal"
-                                HorizontalAlignment="Right"
-                                Spacing="8">
-                      <Button x:Name="ReloadFanCurveButton"
-                              Content="Reload"
-                              Click="ReloadFanCurveClick"
-                              IsEnabled="False" />
-                      <Button x:Name="ApplyFanCurveButton"
-                              Classes="accent"
-                              Content="Apply changes"
-                              Click="ApplyFanCurveClick"
-                              IsEnabled="False" />
-                    </StackPanel>
+                <ui:FASettingsExpander.Footer>
+                  <StackPanel Orientation="Horizontal"
+                              HorizontalAlignment="Right"
+                              Spacing="8">
+                    <Button x:Name="ReloadFanCurveButton"
+                            Content="Reload"
+                            Click="ReloadFanCurveClick"
+                            IsEnabled="False" />
+                    <Button x:Name="ApplyFanCurveButton"
+                            Classes="accent"
+                            Content="Apply changes"
+                            Click="ApplyFanCurveClick"
+                            IsEnabled="False" />
                   </StackPanel>
-                </ui:FASettingsExpanderItem>
+                </ui:FASettingsExpander.Footer>
               </ui:FASettingsExpander>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
@@ -473,6 +474,7 @@
           </ScrollViewer>
 
           <ScrollViewer x:Name="TemperatureHistoryPage"
+                        Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">
@@ -567,6 +569,7 @@
           </ScrollViewer>
 
           <ScrollViewer x:Name="FanControlPage"
+                        Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">
@@ -703,6 +706,7 @@
           </ScrollViewer>
 
           <ScrollViewer x:Name="DeviceSettingsPage"
+                        Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">
@@ -781,6 +785,7 @@
           </ScrollViewer>
 
           <ScrollViewer x:Name="CorePage"
+                        Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">
@@ -814,6 +819,7 @@
           </ScrollViewer>
 
           <ScrollViewer x:Name="AboutPage"
+                        Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24" Spacing="16">

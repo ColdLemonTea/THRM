@@ -10,6 +10,7 @@ internal static class Program
         if (args.Any(static arg => string.Equals(arg, "--self-check", StringComparison.OrdinalIgnoreCase)))
         {
             IpcProtocolSelfCheck.Run();
+            FanCurveEdit.SelfCheck();
             return;
         }
 
