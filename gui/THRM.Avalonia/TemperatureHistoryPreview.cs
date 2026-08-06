@@ -1,5 +1,7 @@
 using System.Globalization;
 using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -14,9 +16,10 @@ public enum HistoryMetric
     Power,
 }
 
-public sealed class HistoryHoverChangedEventArgs(long? timestamp) : EventArgs
+public sealed class HistoryHoverChangedEventArgs(long? timestamp, Point? pointerRatio) : EventArgs
 {
     public long? Timestamp { get; } = timestamp;
+    public Point? PointerRatio { get; } = pointerRatio;
 }
 
 public sealed class TemperatureHistoryPreview : Control
@@ -37,8 +40,11 @@ public sealed class TemperatureHistoryPreview : Control
     public static readonly StyledProperty<long?> HoverTimestampProperty =
         AvaloniaProperty.Register<TemperatureHistoryPreview, long?>(nameof(HoverTimestamp));
 
+    private static readonly StyledProperty<Point> TooltipAnchorProperty =
+        AvaloniaProperty.Register<TemperatureHistoryPreview, Point>(nameof(TooltipAnchor));
+
     static TemperatureHistoryPreview() =>
-        AffectsRender<TemperatureHistoryPreview>(PointsProperty, MetricProperty, HoverTimestampProperty);
+        AffectsRender<TemperatureHistoryPreview>(PointsProperty, MetricProperty, HoverTimestampProperty, TooltipAnchorProperty);
 
     public TemperatureHistoryPreview()
     {
@@ -46,6 +52,15 @@ public sealed class TemperatureHistoryPreview : Control
         AutomationProperties.SetHelpText(
             this,
             "Read-only CPU and GPU history. Hover anywhere in the chart to inspect the closest recorded time.");
+        Transitions = new Transitions
+        {
+            new PointTransition
+            {
+                Property = TooltipAnchorProperty,
+                Duration = TimeSpan.FromMilliseconds(400),
+                Easing = new SplineEasing(0.25, 0.1, 0.25, 1),
+            },
+        };
         PointerEntered += OnPointerEntered;
         PointerMoved += OnPointerMoved;
         PointerExited += OnPointerExited;
@@ -69,6 +84,31 @@ public sealed class TemperatureHistoryPreview : Control
     {
         get => GetValue(HoverTimestampProperty);
         set => SetValue(HoverTimestampProperty, value);
+    }
+
+    private Point TooltipAnchor
+    {
+        get => GetValue(TooltipAnchorProperty);
+        set => SetValue(TooltipAnchorProperty, value);
+    }
+
+    public void SetLinkedHover(long? timestamp, Point? pointerRatio)
+    {
+        SetCurrentValue(HoverTimestampProperty, timestamp);
+        if (timestamp is not null && pointerRatio is { } ratio && TryGetPlot(out var plot))
+        {
+            var samples = GetSamples(plot);
+            if (FindNearest(samples, timestamp) is { } sample)
+            {
+                var firstTimestamp = samples[0].Timestamp;
+                var timestampSpan = (double)samples[^1].Timestamp - firstTimestamp;
+                SetCurrentValue(
+                    TooltipAnchorProperty,
+                    new Point(
+                        X(sample.Timestamp, plot, firstTimestamp, timestampSpan),
+                        plot.Top + Math.Clamp(ratio.Y, 0, 1) * plot.Height));
+            }
+        }
     }
 
     protected override Size MeasureOverride(Size availableSize) => new(
@@ -147,7 +187,7 @@ public sealed class TemperatureHistoryPreview : Control
 
         if (FindNearest(samples, HoverTimestamp) is { } tooltipSample)
         {
-            DrawTooltip(context, plot, tooltipSample, firstTimestamp, timestampSpan, primary, secondary, surface, border, cpu, gpu);
+            DrawTooltip(context, tooltipSample, TooltipAnchor, primary, secondary, surface, border, cpu, gpu);
         }
     }
 
@@ -155,20 +195,20 @@ public sealed class TemperatureHistoryPreview : Control
 
     private void OnPointerMoved(object? sender, PointerEventArgs e) => UpdateHover(e.GetPosition(this));
 
-    private void OnPointerExited(object? sender, PointerEventArgs e) => SetHoverTimestamp(null, notify: true);
+    private void OnPointerExited(object? sender, PointerEventArgs e) => SetHoverTimestamp(null, null, notify: true);
 
     private void UpdateHover(Point pointer)
     {
         if (!TryGetPlot(out var plot) || !plot.Contains(pointer))
         {
-            SetHoverTimestamp(null, notify: true);
+            SetHoverTimestamp(null, null, notify: true);
             return;
         }
 
         var samples = GetSamples(plot);
         if (samples.Count == 0)
         {
-            SetHoverTimestamp(null, notify: true);
+            SetHoverTimestamp(null, null, notify: true);
             return;
         }
 
@@ -186,20 +226,25 @@ public sealed class TemperatureHistoryPreview : Control
             }
         }
 
-        SetHoverTimestamp(closest.Timestamp, notify: true);
+        SetCurrentValue(
+            TooltipAnchorProperty,
+            new Point(X(closest.Timestamp, plot, firstTimestamp, timestampSpan), pointer.Y));
+        SetHoverTimestamp(
+            closest.Timestamp,
+            new Point((pointer.X - plot.Left) / plot.Width, (pointer.Y - plot.Top) / plot.Height),
+            notify: true);
     }
 
-    private void SetHoverTimestamp(long? timestamp, bool notify)
+    private void SetHoverTimestamp(long? timestamp, Point? pointerRatio, bool notify)
     {
-        if (HoverTimestamp == timestamp)
+        if (HoverTimestamp != timestamp)
         {
-            return;
+            SetCurrentValue(HoverTimestampProperty, timestamp);
         }
 
-        SetCurrentValue(HoverTimestampProperty, timestamp);
         if (notify)
         {
-            HoverChanged?.Invoke(this, new HistoryHoverChangedEventArgs(timestamp));
+            HoverChanged?.Invoke(this, new HistoryHoverChangedEventArgs(timestamp, pointerRatio));
         }
     }
 
@@ -335,10 +380,8 @@ public sealed class TemperatureHistoryPreview : Control
 
     private void DrawTooltip(
         DrawingContext context,
-        Rect plot,
         TemperatureHistoryPointSnapshot sample,
-        long firstTimestamp,
-        double timestampSpan,
+        Point pointer,
         IBrush primary,
         IBrush secondary,
         IBrush surface,
@@ -366,10 +409,10 @@ public sealed class TemperatureHistoryPreview : Control
 
         const double width = 166;
         var height = 29 + rows.Count * 19;
-        var guideX = X(sample.Timestamp, plot, firstTimestamp, timestampSpan);
-        var x = guideX + 12 + width <= Bounds.Width ? guideX + 12 : guideX - width - 12;
+        var x = pointer.X + 14 + width <= Bounds.Width ? pointer.X + 14 : pointer.X - width - 14;
         x = Math.Clamp(x, 4, Math.Max(4, Bounds.Width - width - 4));
-        var y = Math.Clamp(plot.Top + 8, 4, Math.Max(4, Bounds.Height - height - 4));
+        var y = pointer.Y + 14 + height <= Bounds.Height ? pointer.Y + 14 : pointer.Y - height - 14;
+        y = Math.Clamp(y, 4, Math.Max(4, Bounds.Height - height - 4));
         var card = new Rect(x, y, width, height);
         context.DrawRectangle(surface, new Pen(border, 1), card, 4, 4);
         DrawText(context, primary, FormatDateTime(sample.Timestamp), new Point(card.Left + 10, card.Top + 8));

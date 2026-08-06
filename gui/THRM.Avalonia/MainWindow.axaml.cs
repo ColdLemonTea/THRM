@@ -1030,12 +1030,12 @@ public partial class MainWindow : Window
     {
         if (!ReferenceEquals(sender, TemperatureHistoryPreview))
         {
-            TemperatureHistoryPreview.HoverTimestamp = e.Timestamp;
+            TemperatureHistoryPreview.SetLinkedHover(e.Timestamp, e.PointerRatio);
         }
 
         if (!ReferenceEquals(sender, PowerHistoryPreview))
         {
-            PowerHistoryPreview.HoverTimestamp = e.Timestamp;
+            PowerHistoryPreview.SetLinkedHover(e.Timestamp, e.PointerRatio);
         }
     }
 

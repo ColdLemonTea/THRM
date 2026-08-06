@@ -102,16 +102,9 @@
   </Window.Resources>
 
   <Window.Styles>
-    <Style Selector="ScrollViewer.page-scroll">
+    <Style Selector="local|SmoothScrollViewer.page-scroll">
       <Setter Property="IsScrollChainingEnabled" Value="True" />
       <Setter Property="IsScrollInertiaEnabled" Value="True" />
-      <Setter Property="Transitions">
-        <Transitions>
-          <animation:VectorTransition Property="Offset"
-                                      Duration="00:00:00.167"
-                                      Easing="0,0,0,1" />
-        </Transitions>
-      </Setter>
     </Style>
   </Window.Styles>
 
@@ -183,7 +176,7 @@
             </TransitioningContentControl.PageTransition>
           </TransitioningContentControl>
           <Grid x:Name="PageCache" Grid.Row="1" IsVisible="False">
-          <ScrollViewer x:Name="StatusPage"
+          <local:SmoothScrollViewer x:Name="StatusPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -326,9 +319,9 @@
               </Border>
 
            </StackPanel>
-          </ScrollViewer>
+          </local:SmoothScrollViewer>
 
-          <ScrollViewer x:Name="FanCurvePage"
+          <local:SmoothScrollViewer x:Name="FanCurvePage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -471,9 +464,9 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </ScrollViewer>
+          </local:SmoothScrollViewer>
 
-          <ScrollViewer x:Name="TemperatureHistoryPage"
+          <local:SmoothScrollViewer x:Name="TemperatureHistoryPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -581,9 +574,9 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </ScrollViewer>
+          </local:SmoothScrollViewer>
 
-          <ScrollViewer x:Name="FanControlPage"
+          <local:SmoothScrollViewer x:Name="FanControlPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -718,9 +711,9 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </ScrollViewer>
+          </local:SmoothScrollViewer>
 
-          <ScrollViewer x:Name="DeviceSettingsPage"
+          <local:SmoothScrollViewer x:Name="DeviceSettingsPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -797,9 +790,9 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </ScrollViewer>
+          </local:SmoothScrollViewer>
 
-          <ScrollViewer x:Name="CorePage"
+          <local:SmoothScrollViewer x:Name="CorePage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -831,9 +824,9 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </ScrollViewer>
+          </local:SmoothScrollViewer>
 
-          <ScrollViewer x:Name="AboutPage"
+          <local:SmoothScrollViewer x:Name="AboutPage"
                         Classes="page-scroll"
                         HorizontalScrollBarVisibility="Disabled"
                         VerticalScrollBarVisibility="Auto">
@@ -862,7 +855,7 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
-          </ScrollViewer>
+          </local:SmoothScrollViewer>
           </Grid>
         </Grid>
       </ui:FANavigationView.Content>
