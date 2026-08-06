@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Interactivity;
@@ -712,12 +713,35 @@ public partial class MainWindow : Window
                 Grid.SetColumn(rpm, 2);
                 FanCurvePointsPanel.Children.Add(row);
                 _fanCurveEditors.Add((temperature, rpm));
+                temperature.PropertyChanged += FanCurveEditorPropertyChanged;
+                rpm.PropertyChanged += FanCurveEditorPropertyChanged;
             }
+
+            UpdateFanCurvePreview();
         }
         finally
         {
             _fanCurveLoading = false;
         }
+    }
+
+    private void FanCurveEditorPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property == FANumberBox.ValueProperty)
+        {
+            UpdateFanCurvePreview();
+        }
+    }
+
+    private void UpdateFanCurvePreview()
+    {
+        FanCurvePreview.Points = _fanCurveEditors
+            .Select(editor => new FanCurvePoint
+            {
+                Temperature = double.IsFinite(editor.Temperature.Value) ? (int)Math.Round(editor.Temperature.Value) : 0,
+                Rpm = double.IsFinite(editor.Rpm.Value) ? (int)Math.Round(editor.Rpm.Value) : 0,
+            })
+            .ToArray();
     }
 
     private bool TryReadFanCurve(out List<FanCurvePoint> curve, out string error)

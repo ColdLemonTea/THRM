@@ -361,6 +361,12 @@
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="DataLine" />
                 </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Curve preview"
+                                           Description="Read-only preview of the active curve. Edit values below to update it.">
+                  <local:FanCurvePreview x:Name="FanCurvePreview"
+                                         Height="240"
+                                         HorizontalAlignment="Stretch" />
+                </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Edit the active profile, then apply the complete curve.">
                   <StackPanel Spacing="12">
                     <Grid ColumnDefinitions="44,*,*" ColumnSpacing="12">
