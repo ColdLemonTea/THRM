@@ -182,6 +182,26 @@ public sealed class ThrmIpcClient : IDisposable
         CancellationToken cancellationToken = default) =>
         SendRequestAsync<FanCurveProfileSnapshot>("SaveFanCurveProfile", new { id, name, curve, setActive }, cancellationToken);
 
+    public Task<bool> DeleteFanCurveProfileAsync(string id, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("DeleteFanCurveProfile", new { id }, cancellationToken);
+
+    public Task<string> ExportFanCurveProfilesAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<string>("ExportFanCurveProfiles", null, cancellationToken);
+
+    public Task<bool> ImportFanCurveProfilesAsync(string code, CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("ImportFanCurveProfiles", new { code }, cancellationToken);
+
+    public async Task ResetLearnedOffsetsAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await SendRequestAsync<JsonElement>("ResetLearnedOffsets", null, cancellationToken).ConfigureAwait(false);
+        if (response.ValueKind != JsonValueKind.Object
+            || !response.TryGetProperty("ok", out var ok)
+            || ok.ValueKind != JsonValueKind.True)
+        {
+            throw new JsonException("IPC response for ResetLearnedOffsets did not contain ok=true.");
+        }
+    }
+
     private async Task<T> SendRequestAsync<T>(string type, object? data, CancellationToken cancellationToken)
     {
         Stream stream;
@@ -766,6 +786,50 @@ internal static class IpcProtocolSelfCheck
             || saveProfileData.GetProperty("curve").GetArrayLength() != 2)
         {
             throw new InvalidOperationException("SaveFanCurveProfile request check failed.");
+        }
+
+        using var deleteProfileRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("DeleteFanCurveProfile", new { id = "quiet" }, "self-check-delete-profile"));
+        var deleteProfileData = deleteProfileRequest.RootElement.GetProperty("data");
+        if (deleteProfileRequest.RootElement.GetProperty("type").GetString() != "DeleteFanCurveProfile"
+            || deleteProfileData.ValueKind != JsonValueKind.Object
+            || deleteProfileData.EnumerateObject().Count() != 1
+            || !deleteProfileData.TryGetProperty("id", out var profileId)
+            || profileId.ValueKind != JsonValueKind.String
+            || profileId.GetString() != "quiet")
+        {
+            throw new InvalidOperationException("DeleteFanCurveProfile request check failed.");
+        }
+
+        using var exportProfilesRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("ExportFanCurveProfiles", null, "self-check-export-profiles"));
+        if (exportProfilesRequest.RootElement.GetProperty("type").GetString() != "ExportFanCurveProfiles"
+            || exportProfilesRequest.RootElement.TryGetProperty("data", out var exportProfilesData)
+                && exportProfilesData.ValueKind != JsonValueKind.Null)
+        {
+            throw new InvalidOperationException("ExportFanCurveProfiles request check failed.");
+        }
+
+        using var importProfilesRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("ImportFanCurveProfiles", new { code = "THRM-PROFILES" }, "self-check-import-profiles"));
+        var importProfilesData = importProfilesRequest.RootElement.GetProperty("data");
+        if (importProfilesRequest.RootElement.GetProperty("type").GetString() != "ImportFanCurveProfiles"
+            || importProfilesData.ValueKind != JsonValueKind.Object
+            || importProfilesData.EnumerateObject().Count() != 1
+            || !importProfilesData.TryGetProperty("code", out var profileCode)
+            || profileCode.ValueKind != JsonValueKind.String
+            || profileCode.GetString() != "THRM-PROFILES")
+        {
+            throw new InvalidOperationException("ImportFanCurveProfiles request check failed.");
+        }
+
+        using var resetLearnedOffsetsRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("ResetLearnedOffsets", null, "self-check-reset-learned-offsets"));
+        if (resetLearnedOffsetsRequest.RootElement.GetProperty("type").GetString() != "ResetLearnedOffsets"
+            || resetLearnedOffsetsRequest.RootElement.TryGetProperty("data", out var resetLearnedOffsetsData)
+                && resetLearnedOffsetsData.ValueKind != JsonValueKind.Null)
+        {
+            throw new InvalidOperationException("ResetLearnedOffsets request check failed.");
         }
 
         using var temperatureHistoryRequest = JsonDocument.Parse(
