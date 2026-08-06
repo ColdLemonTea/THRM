@@ -115,7 +115,6 @@ public sealed class TemperatureHistoryPreview : Control
 
         var cpuPen = new Pen(cpu, 2);
         var gpuPen = new Pen(gpu, 2);
-        var markerPen = new Pen(primary, 1);
         using (context.PushClip(plot))
         {
             Point? previousCpu = null;
@@ -131,7 +130,6 @@ public sealed class TemperatureHistoryPreview : Control
                         context.DrawLine(cpuPen, previous, location);
                     }
 
-                    context.DrawEllipse(cpu, markerPen, location, 3.5, 3.5);
                     previousCpu = location;
                 }
                 else
@@ -147,7 +145,6 @@ public sealed class TemperatureHistoryPreview : Control
                         context.DrawLine(gpuPen, previous, location);
                     }
 
-                    context.DrawEllipse(gpu, markerPen, location, 3.5, 3.5);
                     previousGpu = location;
                 }
                 else
