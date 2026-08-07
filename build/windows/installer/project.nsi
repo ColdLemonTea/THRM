@@ -908,7 +908,9 @@ Section "$(THRM_STR_SECTION_MAIN)" SEC_MAIN
         Delete "$INSTDIR\logs\*.*"
     ${EndIf}
     
-    !insertmacro wails.webview2runtime
+    !ifndef AVALONIA_FRONTEND
+        !insertmacro wails.webview2runtime
+    !endif
 
     SetOutPath $INSTDIR
 
