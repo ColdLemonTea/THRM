@@ -30,7 +30,8 @@ public sealed class AnimatedContentClip : Decorator
 
     static AnimatedContentClip()
     {
-        AffectsMeasure<AnimatedContentClip>(RevealProgressProperty);
+        AffectsMeasure<AnimatedContentClip>(RevealProgressProperty, IsExpandedProperty);
+        AffectsArrange<AnimatedContentClip>(RevealProgressProperty);
         ClipToBoundsProperty.OverrideDefaultValue<AnimatedContentClip>(true);
     }
 

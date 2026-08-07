@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Avalonia;
 using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
@@ -505,6 +506,7 @@ public partial class MainWindow : Window
     private string? _manualGear;
     private string? _manualLevel;
     private Type? _currentPageType;
+    private int _navigationGeneration;
     private readonly List<FanCurvePoint> _fanCurve = [];
     private readonly List<FanCurveProfileSnapshot> _fanCurveProfiles = [];
     private string? _activeFanCurveProfileId;
@@ -598,6 +600,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (OperatingSystem.IsLinux())
+        {
+            RootSurface.Classes.Add("linux-window-background");
+        }
         RtssNavigationItem.IsVisible = OperatingSystem.IsWindows();
         foreach (var comboBox in new[]
                  {
@@ -677,47 +683,56 @@ public partial class MainWindow : Window
         }
 
         NavigateToPage(nextPageType);
-        if (nextPageType == typeof(FanCurveRoute))
-        {
-            _ = RefreshFanCurveAsync();
-        }
-
-        if (nextPageType == typeof(TemperatureHistoryRoute))
-        {
-            _ = RefreshTemperatureHistoryAsync();
-        }
-
-        if (nextPageType == typeof(SystemRoute))
-        {
-            _ = RefreshSystemAutoStartAsync();
-        }
-
-        if (nextPageType == typeof(DiagnosticsRoute))
-        {
-            _ = RefreshDiagnosticsAsync();
-        }
-
-        if (nextPageType == typeof(RtssOverlayRoute))
-        {
-            _ = RefreshStateAsync();
-            _ = RefreshRtssAnchorAsync();
-        }
     }
 
     private void NavigateToPage(Type pageType)
     {
+        var navigationGeneration = ++_navigationGeneration;
         PageFrame.NavigateToType(
             pageType,
             null,
             new FAFrameNavigationOptions
             {
                 IsNavigationStackEnabled = false,
-                TransitionInfoOverride = new FAEntranceNavigationTransitionInfo
+                TransitionInfoOverride = new DeferredRefreshEntranceTransitionInfo(
+                    () => RefreshPageAfterEntrance(pageType, navigationGeneration))
                 {
                     FromVerticalOffset = 24,
                 },
             });
         _currentPageType = pageType;
+    }
+
+    private void RefreshPageAfterEntrance(Type pageType, int navigationGeneration)
+    {
+        if (navigationGeneration != _navigationGeneration
+            || pageType != _currentPageType
+            || _lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (pageType == typeof(FanCurveRoute))
+        {
+            _ = RefreshFanCurveAsync();
+        }
+        else if (pageType == typeof(TemperatureHistoryRoute))
+        {
+            _ = RefreshTemperatureHistoryAsync();
+        }
+        else if (pageType == typeof(SystemRoute))
+        {
+            _ = RefreshSystemAutoStartAsync();
+        }
+        else if (pageType == typeof(DiagnosticsRoute))
+        {
+            _ = RefreshDiagnosticsAsync();
+        }
+        else if (pageType == typeof(RtssOverlayRoute))
+        {
+            _ = RefreshStateAsync();
+            _ = RefreshRtssAnchorAsync();
+        }
     }
 
     private sealed class StatusRoute { }
@@ -729,6 +744,61 @@ public partial class MainWindow : Window
     private sealed class DiagnosticsRoute { }
     private sealed class RtssOverlayRoute { }
     private sealed class AboutRoute { }
+
+    private sealed class DeferredRefreshEntranceTransitionInfo(Action onCompleted) : FANavigationTransitionInfo
+    {
+        public double FromVerticalOffset { get; init; }
+
+        public override async void RunAnimation(Animatable ctrl, CancellationToken cancellationToken)
+        {
+            var animation = new Animation
+            {
+                Easing = new SplineEasing(0.1, 0.9, 0.2, 1.0),
+                Duration = TimeSpan.FromSeconds(0.5),
+                FillMode = FillMode.Forward,
+                Children =
+                {
+                    new KeyFrame
+                    {
+                        Cue = new Cue(0d),
+                        Setters =
+                        {
+                            new Setter(Visual.OpacityProperty, 0d),
+                            new Setter(TranslateTransform.XProperty, 0d),
+                            new Setter(TranslateTransform.YProperty, FromVerticalOffset),
+                        },
+                    },
+                    new KeyFrame
+                    {
+                        Cue = new Cue(1d),
+                        Setters =
+                        {
+                            new Setter(Visual.OpacityProperty, 1d),
+                            new Setter(TranslateTransform.XProperty, 0d),
+                            new Setter(TranslateTransform.YProperty, 0d),
+                        },
+                    },
+                },
+            };
+
+            try
+            {
+                await animation.RunAsync(ctrl, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            (ctrl as Visual)!.Opacity = 1;
+            onCompleted();
+        }
+    }
 
     private sealed class MainWindowPageFactory(MainWindow owner) : IFANavigationPageFactory
     {

@@ -129,9 +129,13 @@
       <Setter Property="IsScrollChainingEnabled" Value="True" />
       <Setter Property="IsScrollInertiaEnabled" Value="True" />
     </Style>
+
+    <Style Selector="Grid.linux-window-background">
+      <Setter Property="Background" Value="{DynamicResource ApplicationPageBackgroundThemeBrush}" />
+    </Style>
   </Window.Styles>
 
-  <Grid>
+  <Grid x:Name="RootSurface">
     <ui:FANavigationView
                          x:Name="NavigationView"
                          PaneDisplayMode="LeftCompact"
