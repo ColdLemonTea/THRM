@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build and Release (Avalonia)
 
 on:
   pull_request:
@@ -7,11 +7,7 @@ on:
       - '**/*.md'
   push:
     branches:
-      - main
-      - dev
-    tags:
-      - 'v*'
-      - 'V*'
+      - '**'
     paths-ignore:
       - 'ota/**'
       - '**/*.md'
@@ -24,7 +20,7 @@ on:
       publish_release:
         description: 'Publish the preview pre-release (compares last formal release -> current commit).'
         required: false
-        default: true
+        default: false
         type: boolean
 
 jobs:
@@ -149,20 +145,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            10.0.x
+            8.0.x
 
-      - name: Install Wails CLI and go-winres
+      - name: Install go-winres
         shell: pwsh
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@latest
           go install github.com/tc-hib/go-winres@latest
           Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:USERPROFILE 'go\bin')
 
@@ -177,25 +169,49 @@ jobs:
             Add-Content -Path $env:GITHUB_PATH -Value $nsisPath
           }
 
-      - name: Cache frontend dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            frontend/node_modules
-            C:\Users\runneradmin\.bun\install\cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/package.json', 'frontend/bun.lock', 'frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-
       - name: Build TempBridge
         shell: cmd
         run: build_bridge.bat
 
-      - name: Build THRM
-        shell: cmd
+      - name: Build Avalonia UI and Core
+        shell: pwsh
         env:
           THRM_BUILD_VERSION: ${{ needs.prepare-release.outputs.build_version }}
-        run: build.bat
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:THRM_BUILD_VERSION
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = (Get-Content -Raw wails.json | ConvertFrom-Json).info.productVersion
+          }
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = 'dev'
+          }
+
+          go-winres make --in cmd/core/winres/winres.json --out cmd/core/rsrc
+          $ldflags = "-s -w -X github.com/TIANLI0/THRM/internal/version.BuildVersion=$version -H=windowsgui"
+          go build -trimpath -ldflags $ldflags -o 'build/bin/THRM Core.exe' ./cmd/core
+          dotnet publish gui/THRM.Avalonia/THRM.Avalonia.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:AssemblyName=THRM `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
+            --output build/bin
+
+          $ui = (Resolve-Path 'build/bin/THRM.exe').Path
+          Push-Location build/windows/installer
+          & (Get-Command makensis -ErrorAction Stop).Source `
+            "/DARG_WAILS_AMD64_BINARY=$ui" `
+            '/DAVALONIA_FRONTEND' `
+            project.nsi
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          Pop-Location
 
       - name: Collect release files
         shell: pwsh
@@ -262,35 +278,44 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          bun-version: latest
+          dotnet-version: '10.0.x'
 
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config \
-            libgtk-3-dev libwebkit2gtk-4.1-dev \
             libhidapi-dev libudev-dev
 
-      - name: Cache frontend dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            frontend/node_modules
-            ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/package.json', 'frontend/bun.lock', 'frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-
-      - name: Build THRM (Linux)
+      - name: Build Avalonia UI and Core (Linux)
+        shell: bash
         env:
           THRM_BUILD_VERSION: ${{ needs.prepare-release.outputs.build_version }}
         run: |
-          chmod +x build.sh
-          ./build.sh
+          set -euo pipefail
+          version="${THRM_BUILD_VERSION:-}"
+          if [ -z "$version" ]; then
+            version=$(grep -oE '"productVersion"[[:space:]]*:[[:space:]]*"[^"]+"' wails.json | sed -E 's/.*"([^"]+)"$/\1/')
+          fi
+          version="${version:-dev}"
+
+          dotnet publish gui/THRM.Avalonia/THRM.Avalonia.csproj \
+            --configuration Release \
+            --runtime linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:AssemblyName=thrm \
+            -p:DebugType=None \
+            -p:DebugSymbols=false \
+            --output build
+          CGO_ENABLED=1 go build -trimpath \
+            -ldflags "-s -w -X github.com/TIANLI0/THRM/internal/version.BuildVersion=$version" \
+            -o build/thrm-core ./cmd/core
 
       - name: Package Linux artifacts (tar.gz + .deb)
         shell: bash
@@ -833,3 +858,4 @@ jobs:
           files: |
             dist/windows/*
             dist/linux/*
+
