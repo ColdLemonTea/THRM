@@ -324,6 +324,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          cp packaging/linux/PKGBUILD.avalonia PKGBUILD
           PRODUCT_VER=$(grep -oE '"productVersion"[[:space:]]*:[[:space:]]*"[^"]+"' wails.json | sed -E 's/.*"([^"]+)"$/\1/')
           PKGBUILD_VER=$(sed -n 's/^pkgver=//p' PKGBUILD)
           if [ "$PKGBUILD_VER" != "$PRODUCT_VER" ]; then
@@ -373,7 +374,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
-          Depends: libgtk-3-0, libwebkit2gtk-4.1-0, libhidapi-hidraw0
+          Depends: libegl1, libfontconfig1, libglib2.0-0, libhidapi-hidraw0, libudev1, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libxcursor1, libxext6, libxi6, libxkbcommon0, libxrandr2
           Recommends: bluez
           Maintainer: TIANLI0 <wutianli@tianli0.top>
           Description: THRM
