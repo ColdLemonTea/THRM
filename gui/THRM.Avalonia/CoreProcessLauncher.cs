@@ -33,13 +33,24 @@ internal static class CoreProcessLauncher
 
         try
         {
-            using var process = Process.Start(new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = corePath,
                 WorkingDirectory = Path.GetDirectoryName(corePath)!,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            });
+            };
+            if (OperatingSystem.IsWindows())
+            {
+                // The release Core has a requireAdministrator manifest. Let Windows
+                // honor it so the bundled Core gets the same launch path as a double-click.
+                startInfo.UseShellExecute = true;
+            }
+            else
+            {
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+            }
+
+            using var process = Process.Start(startInfo);
             if (process is null)
             {
                 status = "THRM Core could not be started.";
