@@ -526,6 +526,10 @@ public partial class MainWindow : Window
     private bool _updatingSpeedAvoidanceControls;
     private readonly List<TemperatureHistoryPointSnapshot> _temperatureHistory = [];
     private readonly List<TimelineEventSnapshot> _timelineEvents = [];
+    private TemperatureHistoryPointSnapshot[] _historyPreviewPoints = [];
+    private TimelineEventSnapshot[] _historyPreviewTimeline = [];
+    private bool _historyPreviewPointsDirty = true;
+    private bool _historyPreviewTimelineDirty = true;
     private bool _temperatureHistoryKnown;
     private bool _temperatureHistoryLoading;
     private bool _temperatureHistoryEnabled;
@@ -3702,9 +3706,13 @@ public partial class MainWindow : Window
 
     private void ApplyFanData(FanDataSnapshot fanData)
     {
-        _deviceFanMaximumRpm = FanRatedRpm.Resolve(fanData, _deviceModel);
+        var fanMaximumRpm = FanRatedRpm.Resolve(fanData, _deviceModel);
         FanText.Text = $"{fanData.CurrentRpm} RPM → {fanData.TargetRpm} RPM";
-        UpdateTemperatureHistoryPreviews();
+        if (_deviceFanMaximumRpm != fanMaximumRpm)
+        {
+            _deviceFanMaximumRpm = fanMaximumRpm;
+            UpdateTemperatureHistoryPreviews();
+        }
     }
 
     private void SetActionAvailability()
@@ -3923,6 +3931,7 @@ public partial class MainWindow : Window
         {
             _temperatureHistory.Clear();
             _temperatureHistory.AddRange(history.Points.OrderBy(point => point.Timestamp));
+            _historyPreviewPointsDirty = true;
             _temperatureHistoryEnabled = history.Enabled;
             _temperatureHistoryRetentionHours = Math.Clamp(history.RetentionHours, 1, 24);
             MergeTimelineEvents(history.Events);
@@ -3944,6 +3953,7 @@ public partial class MainWindow : Window
         var merged = TimelineEventLogic.Merge(_timelineEvents, incoming);
         _timelineEvents.Clear();
         _timelineEvents.AddRange(merged);
+        _historyPreviewTimelineDirty = true;
         TrimTimelineEvents();
     }
 
@@ -3956,7 +3966,10 @@ public partial class MainWindow : Window
 
         var newestTimestamp = _temperatureHistory[^1].Timestamp;
         var cutoff = newestTimestamp - (long)TimeSpan.FromHours(_temperatureHistoryRetentionHours).TotalMilliseconds;
-        _timelineEvents.RemoveAll(item => item.Timestamp < cutoff);
+        if (_timelineEvents.RemoveAll(item => item.Timestamp < cutoff) > 0)
+        {
+            _historyPreviewTimelineDirty = true;
+        }
     }
 
     private void AppendTemperatureHistoryPoint(TemperatureHistoryPointSnapshot point)
@@ -3981,6 +3994,8 @@ public partial class MainWindow : Window
         {
             _temperatureHistory.Add(point);
         }
+
+        _historyPreviewPointsDirty = true;
 
         var cutoff = point.Timestamp - (long)TimeSpan.FromHours(_temperatureHistoryRetentionHours).TotalMilliseconds;
         while (_temperatureHistory.Count > 0 && _temperatureHistory[0].Timestamp < cutoff)
@@ -4016,13 +4031,47 @@ public partial class MainWindow : Window
 
     private void UpdateTemperatureHistoryPreviews()
     {
-        var points = _temperatureHistory.ToArray();
-        TemperatureHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
-        PowerHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
-        TemperatureHistoryPreview.DeviceFanMaximumRpm = _deviceFanMaximumRpm;
-        TemperatureHistoryPreview.TimelineEvents = _timelineEvents.ToArray();
-        TemperatureHistoryPreview.Points = points;
-        PowerHistoryPreview.Points = points;
+        if (_historyPreviewPointsDirty)
+        {
+            _historyPreviewPoints = _temperatureHistory.ToArray();
+            _historyPreviewPointsDirty = false;
+        }
+
+        if (_historyPreviewTimelineDirty)
+        {
+            _historyPreviewTimeline = _timelineEvents.ToArray();
+            _historyPreviewTimelineDirty = false;
+        }
+
+        if (TemperatureHistoryPreview.HistoryWindowHours != _temperatureHistoryRetentionHours)
+        {
+            TemperatureHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
+        }
+
+        if (PowerHistoryPreview.HistoryWindowHours != _temperatureHistoryRetentionHours)
+        {
+            PowerHistoryPreview.HistoryWindowHours = _temperatureHistoryRetentionHours;
+        }
+
+        if (TemperatureHistoryPreview.DeviceFanMaximumRpm != _deviceFanMaximumRpm)
+        {
+            TemperatureHistoryPreview.DeviceFanMaximumRpm = _deviceFanMaximumRpm;
+        }
+
+        if (!ReferenceEquals(TemperatureHistoryPreview.TimelineEvents, _historyPreviewTimeline))
+        {
+            TemperatureHistoryPreview.TimelineEvents = _historyPreviewTimeline;
+        }
+
+        if (!ReferenceEquals(TemperatureHistoryPreview.Points, _historyPreviewPoints))
+        {
+            TemperatureHistoryPreview.Points = _historyPreviewPoints;
+        }
+
+        if (!ReferenceEquals(PowerHistoryPreview.Points, _historyPreviewPoints))
+        {
+            PowerHistoryPreview.Points = _historyPreviewPoints;
+        }
     }
 
     private void HistoryPreviewHoverChanged(object? sender, HistoryHoverChangedEventArgs e)

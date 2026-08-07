@@ -8,13 +8,6 @@ namespace THRM.Avalonia;
 
 public sealed class AnimatedContentClip : Decorator
 {
-    internal static readonly Easing PowerToysEaseInCubic = new SplineEasing
-    {
-        X1 = 1,
-        Y1 = 1,
-        X2 = 0,
-        Y2 = 1,
-    };
     internal static readonly Easing PowerToysEaseOutCubic = new SplineEasing
     {
         X1 = 0,
@@ -22,9 +15,10 @@ public sealed class AnimatedContentClip : Decorator
         X2 = 0,
         Y2 = 1,
     };
-    internal static readonly TimeSpan PowerToysEnterDuration = TimeSpan.FromMilliseconds(333);
-    internal static readonly TimeSpan PowerToysFadeInDuration = TimeSpan.FromMilliseconds(200);
-    internal static readonly TimeSpan PowerToysExitDuration = TimeSpan.FromMilliseconds(180);
+    private static readonly Easing FluentExpandEasing = new CubicEaseOut();
+    private static readonly Easing FluentCollapseEasing = new CubicEaseIn();
+    private static readonly TimeSpan FluentExpandDuration = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan FluentCollapseDuration = TimeSpan.FromMilliseconds(167);
 
     public static readonly StyledProperty<double> RevealProgressProperty =
         AvaloniaProperty.Register<AnimatedContentClip, double>(
@@ -36,8 +30,7 @@ public sealed class AnimatedContentClip : Decorator
 
     static AnimatedContentClip()
     {
-        AffectsMeasure<AnimatedContentClip>(RevealProgressProperty, IsExpandedProperty);
-        AffectsArrange<AnimatedContentClip>(RevealProgressProperty);
+        AffectsMeasure<AnimatedContentClip>(RevealProgressProperty);
         ClipToBoundsProperty.OverrideDefaultValue<AnimatedContentClip>(true);
     }
 
@@ -71,20 +64,20 @@ public sealed class AnimatedContentClip : Decorator
             if (transition.Property == RevealProgressProperty)
             {
                 transition.Easing = IsExpanded
-                    ? PowerToysEaseOutCubic
-                    : PowerToysEaseInCubic;
+                    ? FluentExpandEasing
+                    : FluentCollapseEasing;
                 transition.Duration = IsExpanded
-                    ? PowerToysEnterDuration
-                    : PowerToysExitDuration;
+                    ? FluentExpandDuration
+                    : FluentCollapseDuration;
             }
             else if (transition.Property == Visual.OpacityProperty)
             {
                 transition.Easing = IsExpanded
-                    ? PowerToysEaseOutCubic
-                    : PowerToysEaseInCubic;
+                    ? FluentExpandEasing
+                    : FluentCollapseEasing;
                 transition.Duration = IsExpanded
-                    ? PowerToysFadeInDuration
-                    : PowerToysExitDuration;
+                    ? FluentExpandDuration
+                    : FluentCollapseDuration;
             }
         }
 
@@ -127,9 +120,11 @@ public sealed class AnimatedContentClip : Decorator
             || CalculateRevealedHeight(100, 1) != 100
             || CalculateRevealedHeight(100, -1) != 0
             || CalculateRevealedHeight(100, 2) != 100
-            || PowerToysEaseInCubic is not SplineEasing { X1: 1, Y1: 1, X2: 0, Y2: 1 }
             || PowerToysEaseOutCubic is not SplineEasing { X1: 0, Y1: 0, X2: 0, Y2: 1 }
-            || PowerToysEaseInCubic.Ease(0.5) >= PowerToysEaseOutCubic.Ease(0.5))
+            || FluentExpandEasing is not CubicEaseOut
+            || FluentCollapseEasing is not CubicEaseIn
+            || FluentExpandDuration != TimeSpan.FromMilliseconds(200)
+            || FluentCollapseDuration != TimeSpan.FromMilliseconds(167))
         {
             throw new InvalidOperationException("Expander reveal check failed.");
         }
