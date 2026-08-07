@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Automation;
@@ -131,6 +132,193 @@ internal static class LearnedOffsetSummary
     }
 }
 
+internal static class TimeCurveScheduleState
+{
+    public static bool Matches(TimeCurveScheduleSnapshot? left, TimeCurveScheduleSnapshot? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        return left.Enabled == right.Enabled
+            && left.Rules.Count == right.Rules.Count
+            && left.Rules.Zip(right.Rules).All(pair => RulesMatch(pair.First, pair.Second));
+    }
+
+    public static void SelfCheck()
+    {
+        var first = new TimeCurveScheduleSnapshot
+        {
+            Enabled = true,
+            Rules =
+            [
+                new TimeCurveScheduleRuleSnapshot
+                {
+                    Id = "rule-1",
+                    Name = "Quiet hours",
+                    Enabled = true,
+                    Weekdays = [1, 2, 3],
+                    StartTime = "22:00",
+                    EndTime = "06:00",
+                    CurveProfileId = "quiet",
+                },
+            ],
+        };
+        var equivalent = new TimeCurveScheduleSnapshot
+        {
+            Enabled = true,
+            Rules =
+            [
+                new TimeCurveScheduleRuleSnapshot
+                {
+                    Id = "rule-1",
+                    Name = "Quiet hours",
+                    Enabled = true,
+                    Weekdays = [3, 1, 2],
+                    StartTime = "22:00",
+                    EndTime = "06:00",
+                    CurveProfileId = "quiet",
+                },
+            ],
+        };
+        var changed = new TimeCurveScheduleSnapshot
+        {
+            Enabled = true,
+            Rules =
+            [
+                new TimeCurveScheduleRuleSnapshot
+                {
+                    Id = "rule-1",
+                    Name = "Quiet hours",
+                    Enabled = true,
+                    Weekdays = [1, 2, 3],
+                    StartTime = "21:00",
+                    EndTime = "06:00",
+                    CurveProfileId = "quiet",
+                },
+            ],
+        };
+
+        if (!Matches(first, equivalent) || Matches(first, changed) || Matches(first, null))
+        {
+            throw new InvalidOperationException("Time curve schedule state check failed.");
+        }
+    }
+
+    private static bool RulesMatch(TimeCurveScheduleRuleSnapshot left, TimeCurveScheduleRuleSnapshot right) =>
+        string.Equals(left.Id, right.Id, StringComparison.Ordinal)
+        && string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+        && left.Enabled == right.Enabled
+        && string.Equals(left.StartTime, right.StartTime, StringComparison.Ordinal)
+        && string.Equals(left.EndTime, right.EndTime, StringComparison.Ordinal)
+        && string.Equals(left.CurveProfileId, right.CurveProfileId, StringComparison.Ordinal)
+        && left.Weekdays.Distinct().OrderBy(day => day).SequenceEqual(right.Weekdays.Distinct().OrderBy(day => day));
+}
+
+internal static class LightStripLogic
+{
+    public static readonly string[] ModeValues =
+    [
+        "off",
+        "smart_temp",
+        "static_single",
+        "static_multi",
+        "rotation",
+        "flowing",
+        "breathing",
+    ];
+
+    public static readonly string[] SpeedValues = ["fast", "medium", "slow"];
+
+    public static int RequiredColorCount(string? mode) => mode switch
+    {
+        "off" or "smart_temp" or "flowing" => 0,
+        "static_single" => 1,
+        "static_multi" or "rotation" or "breathing" => 3,
+        _ => 3,
+    };
+
+    public static bool IsAnimated(string? mode) =>
+        mode is "rotation" or "flowing" or "breathing";
+
+    public static LightStripSnapshot Normalize(LightStripSnapshot? config)
+    {
+        var defaults = Default();
+        if (config is null)
+        {
+            return defaults;
+        }
+
+        var colors = config.Colors is { Count: > 0 }
+            ? config.Colors.Select(CloneColor).ToList()
+            : defaults.Colors.Select(CloneColor).ToList();
+        while (colors.Count < 3)
+        {
+            colors.Add(CloneColor(defaults.Colors[colors.Count]));
+        }
+
+        return new LightStripSnapshot
+        {
+            Mode = string.IsNullOrWhiteSpace(config.Mode) ? defaults.Mode : config.Mode,
+            Speed = string.IsNullOrWhiteSpace(config.Speed) ? defaults.Speed : config.Speed,
+            Brightness = Math.Clamp(config.Brightness, 0, 100),
+            Colors = colors,
+        };
+    }
+
+    public static LightStripSnapshot Default() => new()
+    {
+        Mode = "smart_temp",
+        Speed = "medium",
+        Brightness = 100,
+        Colors =
+        [
+            new LightRgbSnapshot { R = 255, G = 0, B = 0 },
+            new LightRgbSnapshot { R = 0, G = 255, B = 0 },
+            new LightRgbSnapshot { R = 0, G = 128, B = 255 },
+        ],
+    };
+
+    public static void SelfCheck()
+    {
+        if (RequiredColorCount("off") != 0
+            || RequiredColorCount("smart_temp") != 0
+            || RequiredColorCount("flowing") != 0
+            || RequiredColorCount("static_single") != 1
+            || RequiredColorCount("static_multi") != 3
+            || RequiredColorCount("rotation") != 3
+            || RequiredColorCount("breathing") != 3
+            || !IsAnimated("rotation")
+            || IsAnimated("static_single"))
+        {
+            throw new InvalidOperationException("Light strip mode check failed.");
+        }
+
+        var normalized = Normalize(new LightStripSnapshot
+        {
+            Mode = "static_single",
+            Speed = "fast",
+            Brightness = 140,
+            Colors = [new LightRgbSnapshot { R = 1, G = 2, B = 3 }],
+        });
+        if (normalized.Brightness != 100
+            || normalized.Colors.Count != 3
+            || normalized.Colors[0].R != 1
+            || normalized.Colors[1].G != 255)
+        {
+            throw new InvalidOperationException("Light strip normalization check failed.");
+        }
+    }
+
+    private static LightRgbSnapshot CloneColor(LightRgbSnapshot color) => new()
+    {
+        R = color.R,
+        G = color.G,
+        B = color.B,
+    };
+}
+
 public partial class MainWindow : Window
 {
     private readonly ThrmIpcClient _ipc = new();
@@ -143,6 +331,14 @@ public partial class MainWindow : Window
     private bool _customSpeedEnabled;
     private int _customSpeedRpm = 2000;
     private bool _gearLight;
+    private LightStripSnapshot _lightStrip = LightStripLogic.Default();
+    private bool _systemAutoStartEnabled;
+    private bool _systemAutoStartAdmin;
+    private string _systemAutoStartMethod = "none";
+    private bool _systemAutoStartKnown;
+    private bool _systemAutoStartLoading;
+    private string? _systemAutoStartError;
+    private bool _updatingSystemAutoStartControls;
     private bool _powerOnStart;
     private string _smartStartStop = "off";
     private bool _updatingConfigControls;
@@ -156,6 +352,10 @@ public partial class MainWindow : Window
     private readonly List<FanCurveProfileSnapshot> _fanCurveProfiles = [];
     private string? _activeFanCurveProfileId;
     private TimeCurveScheduleSnapshot _timeCurveSchedule = new();
+    private bool _timeCurveScheduleSupported;
+    private TimeCurveScheduleSnapshot? _renderedTimeCurveSchedule;
+    private bool? _renderedTimeCurveScheduleSupported;
+    private bool _suppressTimeCurveScheduleVisualSync;
     private bool _fanCurveKnown;
     private bool _fanCurveLoading;
     private bool _fanCurveLearningEnabled;
@@ -190,6 +390,19 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        foreach (var comboBox in new[]
+                 {
+                     FanCurveProfileComboBox,
+                     TemperatureHistoryRetentionComboBox,
+                     ManualGearComboBox,
+                     ManualLevelComboBox,
+                     LightModeComboBox,
+                     LightSpeedComboBox,
+                     SmartStartStopComboBox,
+                 })
+        {
+            AttachComboBoxOpeningAnimation(comboBox);
+        }
         using (var iconStream = AssetLoader.Open(new Uri("avares://THRM.Avalonia/Assets/thrm.png")))
         {
             Icon = new WindowIcon(new Bitmap(iconStream));
@@ -223,6 +436,7 @@ public partial class MainWindow : Window
             "temperature-history" => typeof(TemperatureHistoryRoute),
             "fan-control" => typeof(FanControlRoute),
             "device-settings" => typeof(DeviceSettingsRoute),
+            "system" => typeof(SystemRoute),
             "about" => typeof(AboutRoute),
             _ => null,
         };
@@ -241,6 +455,11 @@ public partial class MainWindow : Window
         if (nextPageType == typeof(TemperatureHistoryRoute))
         {
             _ = RefreshTemperatureHistoryAsync();
+        }
+
+        if (nextPageType == typeof(SystemRoute))
+        {
+            _ = RefreshSystemAutoStartAsync();
         }
     }
 
@@ -265,6 +484,7 @@ public partial class MainWindow : Window
     private sealed class TemperatureHistoryRoute { }
     private sealed class FanControlRoute { }
     private sealed class DeviceSettingsRoute { }
+    private sealed class SystemRoute { }
     private sealed class AboutRoute { }
 
     private sealed class MainWindowPageFactory(MainWindow owner) : IFANavigationPageFactory
@@ -276,6 +496,7 @@ public partial class MainWindow : Window
             var type when type == typeof(TemperatureHistoryRoute) => owner.TemperatureHistoryPage,
             var type when type == typeof(FanControlRoute) => owner.FanControlPage,
             var type when type == typeof(DeviceSettingsRoute) => owner.DeviceSettingsPage,
+            var type when type == typeof(SystemRoute) => owner.SystemPage,
             var type when type == typeof(AboutRoute) => owner.AboutPage,
             _ => null,
         };
@@ -329,6 +550,11 @@ public partial class MainWindow : Window
                 if (_currentPageType == typeof(TemperatureHistoryRoute))
                 {
                     _ = RefreshTemperatureHistoryAsync();
+                }
+
+                if (_currentPageType == typeof(SystemRoute))
+                {
+                    _ = RefreshSystemAutoStartAsync();
                 }
             }
         });
@@ -459,6 +685,405 @@ public partial class MainWindow : Window
             enabled ? "Enable gear light" : "Disable gear light",
             () => _ipc.SetGearLightAsync(enabled, _lifetime.Token));
     }
+
+    private void LightModeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingConfigControls)
+        {
+            return;
+        }
+
+        var mode = SelectedCoreValue(LightModeComboBox, LightStripLogic.ModeValues);
+        if (mode is null || !CanChangeDeviceFeatures() || IsBs1)
+        {
+            ApplyLightStripControls();
+            return;
+        }
+
+        _lightStrip = new LightStripSnapshot
+        {
+            Mode = mode,
+            Speed = _lightStrip.Speed,
+            Brightness = _lightStrip.Brightness,
+            Colors = _lightStrip.Colors.Select(CloneLightColor).ToList(),
+        };
+        ApplyLightStripControls();
+    }
+
+    private void LightSpeedSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingConfigControls)
+        {
+            return;
+        }
+
+        var speed = SelectedCoreValue(LightSpeedComboBox, LightStripLogic.SpeedValues);
+        if (speed is null || !CanChangeDeviceFeatures() || IsBs1)
+        {
+            ApplyLightStripControls();
+            return;
+        }
+
+        _lightStrip = new LightStripSnapshot
+        {
+            Mode = _lightStrip.Mode,
+            Speed = speed,
+            Brightness = _lightStrip.Brightness,
+            Colors = _lightStrip.Colors.Select(CloneLightColor).ToList(),
+        };
+    }
+
+    private void LightBrightnessValueChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (_updatingConfigControls)
+        {
+            return;
+        }
+
+        if (!CanChangeDeviceFeatures() || IsBs1)
+        {
+            ApplyLightStripControls();
+            return;
+        }
+
+        _lightStrip = new LightStripSnapshot
+        {
+            Mode = _lightStrip.Mode,
+            Speed = _lightStrip.Speed,
+            Brightness = (int)Math.Round(Math.Clamp(e.NewValue, 0, 100)),
+            Colors = _lightStrip.Colors.Select(CloneLightColor).ToList(),
+        };
+        LightBrightnessValueText.Text = $"{_lightStrip.Brightness}%";
+    }
+
+    private void LightColorChanged(object? sender, ColorChangedEventArgs e)
+    {
+        if (_updatingConfigControls || !CanChangeDeviceFeatures() || IsBs1)
+        {
+            return;
+        }
+
+        var index = sender switch
+        {
+            ColorPicker picker when ReferenceEquals(picker, LightColorPicker0) => 0,
+            ColorPicker picker when ReferenceEquals(picker, LightColorPicker1) => 1,
+            ColorPicker picker when ReferenceEquals(picker, LightColorPicker2) => 2,
+            _ => -1,
+        };
+        if (index < 0)
+        {
+            return;
+        }
+
+        var colors = LightStripLogic.Normalize(_lightStrip).Colors
+            .Select(CloneLightColor)
+            .ToList();
+        colors[index] = new LightRgbSnapshot
+        {
+            R = e.NewColor.R,
+            G = e.NewColor.G,
+            B = e.NewColor.B,
+        };
+        _lightStrip = new LightStripSnapshot
+        {
+            Mode = _lightStrip.Mode,
+            Speed = _lightStrip.Speed,
+            Brightness = _lightStrip.Brightness,
+            Colors = colors,
+        };
+    }
+
+    private void LightPresetClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string preset }
+            || !CanChangeDeviceFeatures()
+            || IsBs1)
+        {
+            return;
+        }
+
+        List<LightRgbSnapshot>? colors = preset switch
+        {
+            "neon" =>
+            [
+                new LightRgbSnapshot { R = 255, G = 0, B = 128 },
+                new LightRgbSnapshot { R = 0, G = 255, B = 255 },
+                new LightRgbSnapshot { R = 128, G = 0, B = 255 },
+            ],
+            "forest" =>
+            [
+                new LightRgbSnapshot { R = 86, G = 169, B = 84 },
+                new LightRgbSnapshot { R = 161, G = 210, B = 106 },
+                new LightRgbSnapshot { R = 44, G = 120, B = 115 },
+            ],
+            "glacier" =>
+            [
+                new LightRgbSnapshot { R = 80, G = 170, B = 255 },
+                new LightRgbSnapshot { R = 116, G = 214, B = 255 },
+                new LightRgbSnapshot { R = 200, G = 240, B = 255 },
+            ],
+            _ => null,
+        };
+        if (colors is null)
+        {
+            return;
+        }
+
+        _lightStrip = new LightStripSnapshot
+        {
+            Mode = _lightStrip.Mode,
+            Speed = _lightStrip.Speed,
+            Brightness = _lightStrip.Brightness,
+            Colors = colors,
+        };
+        ApplyLightStripControls();
+    }
+
+    private async void ApplyLightStripClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeDeviceFeatures() || IsBs1)
+        {
+            SetActionAvailability();
+            return;
+        }
+
+        var config = LightStripLogic.Normalize(_lightStrip);
+        await RunWriteAsync("Apply lighting", () => _ipc.SetLightStripAsync(config, _lifetime.Token));
+    }
+
+    private void ApplyLightStripControls()
+    {
+        var wasUpdating = _updatingConfigControls;
+        _updatingConfigControls = true;
+        try
+        {
+            SelectCoreValue(LightModeComboBox, LightStripLogic.ModeValues, _lightStrip.Mode);
+            SelectCoreValue(LightSpeedComboBox, LightStripLogic.SpeedValues, _lightStrip.Speed);
+            LightBrightnessSlider.Value = _lightStrip.Brightness;
+            LightBrightnessValueText.Text = $"{_lightStrip.Brightness}%";
+            LightSmartTemperatureDeviceSetting.IsVisible = _lightStrip.Mode == "smart_temp";
+            LightSmartTemperatureInfoBar.IsOpen = _lightStrip.Mode == "smart_temp";
+
+            var requiredColorCount = LightStripLogic.RequiredColorCount(_lightStrip.Mode);
+            LightColorsDeviceSetting.IsVisible = requiredColorCount > 0;
+            LightColorSlot0.IsVisible = requiredColorCount >= 1;
+            LightColorSlot1.IsVisible = requiredColorCount >= 2;
+            LightColorSlot2.IsVisible = requiredColorCount >= 3;
+
+            var colors = LightStripLogic.Normalize(_lightStrip).Colors;
+            LightColorPicker0.Color = ToAvaloniaColor(colors[0]);
+            LightColorPicker1.Color = ToAvaloniaColor(colors[1]);
+            LightColorPicker2.Color = ToAvaloniaColor(colors[2]);
+        }
+        finally
+        {
+            _updatingConfigControls = wasUpdating;
+        }
+
+        SetActionAvailability();
+    }
+
+    private static Color ToAvaloniaColor(LightRgbSnapshot color) =>
+        Color.FromRgb(color.R, color.G, color.B);
+
+    private static LightRgbSnapshot CloneLightColor(LightRgbSnapshot color) => new()
+    {
+        R = color.R,
+        G = color.G,
+        B = color.B,
+    };
+
+    private async Task RefreshSystemAutoStartAsync()
+    {
+        if (!_ipc.IsConnected)
+        {
+            _systemAutoStartKnown = false;
+            _systemAutoStartLoading = false;
+            _systemAutoStartError = null;
+            ApplySystemAutoStartPresentation();
+            SetActionAvailability();
+            return;
+        }
+
+        if (_systemAutoStartLoading)
+        {
+            return;
+        }
+
+        _systemAutoStartLoading = true;
+        _systemAutoStartError = null;
+        ApplySystemAutoStartPresentation();
+        SetActionAvailability();
+        try
+        {
+            var enabledTask = _ipc.CheckWindowsAutoStartAsync(_lifetime.Token);
+            var methodTask = _ipc.GetAutoStartMethodAsync(_lifetime.Token);
+            var adminTask = _ipc.IsRunningAsAdminAsync(_lifetime.Token);
+            await Task.WhenAll(enabledTask, methodTask, adminTask);
+            if (!_ipc.IsConnected)
+            {
+                _systemAutoStartKnown = false;
+                return;
+            }
+
+            _systemAutoStartEnabled = enabledTask.Result;
+            _systemAutoStartMethod = NormalizeAutoStartMethod(methodTask.Result);
+            _systemAutoStartAdmin = adminTask.Result;
+            _systemAutoStartKnown = true;
+        }
+        catch (Exception ex)
+        {
+            _systemAutoStartKnown = false;
+            _systemAutoStartError = ex.Message;
+        }
+        finally
+        {
+            _systemAutoStartLoading = false;
+            ApplySystemAutoStartPresentation();
+            SetActionAvailability();
+        }
+    }
+
+    private async void SystemAutoStartClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingSystemAutoStartControls)
+        {
+            return;
+        }
+
+        if (!CanChangeSystemAutoStart())
+        {
+            ApplySystemAutoStartPresentation();
+            SetActionAvailability();
+            return;
+        }
+
+        var enable = SystemAutoStartSwitch.IsChecked == true;
+        var method = enable ? PreferredAutoStartMethod() : string.Empty;
+        SystemAutoStartSwitch.IsChecked = _systemAutoStartEnabled;
+        _systemAutoStartError = null;
+        var acceptedButUnsynchronized = false;
+        var synchronized = await RunWriteAsync(
+            enable ? "Enable startup" : "Disable startup",
+            () => _ipc.SetAutoStartWithMethodAsync(enable, method, _lifetime.Token),
+            onAcceptedButUnsynchronized: () => acceptedButUnsynchronized = true);
+        if (synchronized)
+        {
+            await RefreshSystemAutoStartAsync();
+        }
+        else if (acceptedButUnsynchronized)
+        {
+            _systemAutoStartKnown = false;
+            _systemAutoStartError = "The startup change could not be confirmed; refresh later to verify the current state.";
+            ApplySystemAutoStartPresentation();
+            SetActionAvailability();
+        }
+        else
+        {
+            ApplySystemAutoStartPresentation();
+            SetActionAvailability();
+        }
+    }
+
+    private bool CanChangeSystemAutoStart() =>
+        _ipc.IsConnected
+        && _systemAutoStartKnown
+        && !_systemAutoStartLoading
+        && !_writeInProgress;
+
+    private string PreferredAutoStartMethod() =>
+        OperatingSystem.IsWindows()
+            ? _systemAutoStartAdmin ? "task_scheduler" : "registry"
+            : "desktop";
+
+    private void ApplySystemAutoStartPresentation()
+    {
+        var wasUpdating = _updatingSystemAutoStartControls;
+        _updatingSystemAutoStartControls = true;
+        try
+        {
+            SystemAutoStartSwitch.IsChecked = _systemAutoStartEnabled;
+        }
+        finally
+        {
+            _updatingSystemAutoStartControls = wasUpdating;
+        }
+
+        if (!_ipc.IsConnected)
+        {
+            SystemAutoStartStateText.Text = "Unavailable: THRM Core is not connected.";
+            SystemAutoStartMethodText.Text = "Current method: —";
+            ShowSystemAutoStartInfo(
+                FAInfoBarSeverity.Warning,
+                "Startup unavailable",
+                "Connect to THRM Core to read or change the startup setting.");
+            return;
+        }
+
+        if (_systemAutoStartLoading)
+        {
+            SystemAutoStartStateText.Text = "Loading startup state from THRM Core...";
+            SystemAutoStartMethodText.Text = "Current method: —";
+            SystemAutoStartInfoBar.IsOpen = false;
+            SystemAutoStartInfoSetting.IsVisible = false;
+            return;
+        }
+
+        if (!_systemAutoStartKnown)
+        {
+            SystemAutoStartStateText.Text = "Startup state is unavailable.";
+            SystemAutoStartMethodText.Text = "Current method: —";
+            ShowSystemAutoStartInfo(
+                FAInfoBarSeverity.Error,
+                "Startup state unavailable",
+                _systemAutoStartError ?? "THRM Core did not return the startup state.");
+            return;
+        }
+
+        SystemAutoStartStateText.Text = _systemAutoStartEnabled
+            ? "Enabled. THRM will start when you sign in."
+            : "Disabled. THRM will not start automatically.";
+        SystemAutoStartMethodText.Text = $"Current method: {AutoStartMethodLabel(_systemAutoStartMethod)}";
+        if (!string.IsNullOrWhiteSpace(_systemAutoStartError))
+        {
+            ShowSystemAutoStartInfo(FAInfoBarSeverity.Error, "Startup update failed", _systemAutoStartError);
+        }
+        else if (_systemAutoStartMethod == "task_scheduler" && !_systemAutoStartAdmin)
+        {
+            ShowSystemAutoStartInfo(
+                FAInfoBarSeverity.Warning,
+                "Administrator permission",
+                "The current Task Scheduler entry requires administrator permission to manage.");
+        }
+        else
+        {
+            SystemAutoStartInfoBar.IsOpen = false;
+            SystemAutoStartInfoSetting.IsVisible = false;
+        }
+    }
+
+    private void ShowSystemAutoStartInfo(FAInfoBarSeverity severity, string title, string message)
+    {
+        SystemAutoStartInfoSetting.IsVisible = true;
+        SystemAutoStartInfoBar.Severity = severity;
+        SystemAutoStartInfoBar.Title = title;
+        SystemAutoStartInfoBar.Message = message;
+        SystemAutoStartInfoBar.IsOpen = true;
+    }
+
+    private static string NormalizeAutoStartMethod(string? method) => method switch
+    {
+        "task_scheduler" or "registry" or "desktop" or "none" => method,
+        _ => "none",
+    };
+
+    private static string AutoStartMethodLabel(string method) => method switch
+    {
+        "task_scheduler" => "Task Scheduler",
+        "registry" => "Registry",
+        "desktop" => "Desktop autostart",
+        _ => "Not enabled",
+    };
 
     private async void PowerOnStartClick(object? sender, RoutedEventArgs e)
     {
@@ -617,6 +1242,38 @@ public partial class MainWindow : Window
 
         presenter.Opacity = 1;
         presenter.RenderTransform = TransformOperations.Identity;
+    }
+
+    private static void AttachComboBoxOpeningAnimation(FAComboBox comboBox)
+    {
+        comboBox.TemplateApplied += (_, e) =>
+        {
+            if (e.NameScope.Find<Popup>("Popup") is not { Child: Control presenter } popup)
+            {
+                return;
+            }
+
+            PrepareComboBoxPopup(presenter);
+            popup.Opened += (_, _) => Dispatcher.UIThread.Post(() =>
+            {
+                if (!popup.IsOpen)
+                {
+                    return;
+                }
+
+                presenter.Opacity = 1;
+                presenter.RenderTransform = TransformOperations.Identity;
+            }, DispatcherPriority.Background);
+            popup.Closed += (_, _) => PrepareComboBoxPopup(presenter);
+        };
+    }
+
+    private static void PrepareComboBoxPopup(Control presenter)
+    {
+        presenter.Transitions = null;
+        presenter.Opacity = 0;
+        presenter.RenderTransform = TransformOperations.Parse("translate(0px, -4px)");
+        presenter.Transitions = CreateFlyoutTransitions();
     }
 
     private static Transitions CreateFlyoutTransitions() =>
@@ -833,7 +1490,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task<bool> RunWriteAsync(string action, Func<Task<bool>> request)
+    private async Task<bool> RunWriteAsync(
+        string action,
+        Func<Task<bool>> request,
+        Action? onAcceptedButUnsynchronized = null)
     {
         if (_writeInProgress)
         {
@@ -863,7 +1523,12 @@ public partial class MainWindow : Window
                 return true;
             }
 
-            SetActivity($"{action} accepted, but state was not synchronized; known state retained.", FAInfoBarSeverity.Warning);
+            onAcceptedButUnsynchronized?.Invoke();
+            SetActivity(
+                onAcceptedButUnsynchronized is null
+                    ? $"{action} accepted, but state was not synchronized; known state retained."
+                    : $"{action} was accepted, but current state could not be confirmed; refresh later.",
+                FAInfoBarSeverity.Warning);
             return false;
         }
         catch (Exception ex)
@@ -891,10 +1556,18 @@ public partial class MainWindow : Window
         try
         {
             var pingTask = _ipc.PingAsync();
-            var configTask = _ipc.GetConfigAsync();
+            var configTask = _ipc.GetConfigJsonAsync();
             var statusTask = _ipc.GetDeviceStatusAsync();
             await Task.WhenAll(pingTask, configTask, statusTask);
-            ApplyConfig(configTask.Result);
+            var configJson = configTask.Result;
+            if (configJson.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException("GetConfig response was not a JSON object.");
+            }
+
+            var config = configJson.Deserialize<ConfigSnapshot>(ThrmIpcClient.JsonOptions)
+                ?? throw new JsonException("GetConfig response contained no configuration.");
+            ApplyConfig(config, configJson.TryGetProperty("timeCurveSchedule", out _));
             ApplyDeviceStatus(statusTask.Result);
             _configKnown = true;
             _deviceStateKnown = true;
@@ -926,6 +1599,13 @@ public partial class MainWindow : Window
         _temperatureHistoryKnown = connected && _temperatureHistoryKnown;
         if (!connected)
         {
+            _systemAutoStartKnown = false;
+            _systemAutoStartLoading = false;
+            _systemAutoStartError = null;
+            ApplySystemAutoStartPresentation();
+        }
+        if (!connected)
+        {
             TemperatureHistoryStateText.Text = "Temperature history unavailable: THRM Core is not connected.";
         }
         SetActionAvailability();
@@ -948,7 +1628,7 @@ public partial class MainWindow : Window
         });
     }
 
-    private void ApplyConfig(ConfigSnapshot config)
+    private void ApplyConfig(ConfigSnapshot config, bool timeCurveSchedulePropertyPresent)
     {
         _updatingConfigControls = true;
         try
@@ -957,11 +1637,16 @@ public partial class MainWindow : Window
             _customSpeedEnabled = config.CustomSpeedEnabled;
             _customSpeedRpm = config.CustomSpeedRpm is >= 1000 and <= 4000 ? config.CustomSpeedRpm : 2000;
             _gearLight = config.GearLight;
+            _lightStrip = LightStripLogic.Normalize(config.LightStrip);
             _powerOnStart = config.PowerOnStart;
             _smartStartStop = SmartStartStopValues.Contains(config.SmartStartStop) ? config.SmartStartStop! : "off";
             _fanCurveLearningEnabled = config.SmartControl?.Learning == true;
             _fanCurveLearningBias = config.SmartControl?.LearningBias ?? "balanced";
-            _timeCurveSchedule = CloneTimeCurveSchedule(config.TimeCurveSchedule);
+            _timeCurveScheduleSupported = timeCurveSchedulePropertyPresent;
+            if (config.TimeCurveSchedule is not null)
+            {
+                _timeCurveSchedule = CloneTimeCurveSchedule(config.TimeCurveSchedule);
+            }
             _learnedFanCurveOffsets.Clear();
             _learnedFanCurveOffsets.AddRange(config.SmartControl?.LearnedOffsets ?? []);
             if (!string.IsNullOrWhiteSpace(config.ManualGear))
@@ -982,6 +1667,7 @@ public partial class MainWindow : Window
             SelectCoreValue(SmartStartStopComboBox, SmartStartStopValues, _smartStartStop);
             SelectCoreValue(ManualGearComboBox, ManualGearValues, _manualGear);
             SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
+            ApplyLightStripControls();
             UpdateManualAppliedText();
             UpdateFanCurvePreview();
             ApplyTimeCurveScheduleControls();
@@ -1052,8 +1738,7 @@ public partial class MainWindow : Window
 
         var canChangeManual = CanChangeManualControl();
         ManualGearComboBox.IsEnabled = canChangeManual;
-        ManualLevelLabel.IsVisible = !IsBs1;
-        ManualLevelComboBox.IsVisible = !IsBs1;
+        ManualLevelSetting.IsVisible = !IsBs1;
         ManualLevelComboBox.IsEnabled = canChangeManual && !IsBs1;
         ManualLevelInfo.IsVisible = IsBs1;
         ApplyManualGearButton.IsEnabled = canChangeManual
@@ -1068,6 +1753,18 @@ public partial class MainWindow : Window
         CustomSpeedStatusText.Text = GetCustomSpeedAvailabilityText(canChangeCustomSpeed);
 
         var canChangeDeviceFeatures = CanChangeDeviceFeatures();
+        var canChangeLighting = canChangeDeviceFeatures && !IsBs1;
+        LightingDeviceExpander.IsVisible = !IsBs1;
+        LightModeComboBox.IsEnabled = canChangeLighting;
+        LightSpeedComboBox.IsEnabled = canChangeLighting && LightStripLogic.IsAnimated(_lightStrip.Mode);
+        LightBrightnessSlider.IsEnabled = canChangeLighting
+            && _lightStrip.Mode is not "off" and not "smart_temp";
+        LightColorPresetPanel.IsEnabled = canChangeLighting;
+        LightColorPicker0.IsEnabled = canChangeLighting;
+        LightColorPicker1.IsEnabled = canChangeLighting;
+        LightColorPicker2.IsEnabled = canChangeLighting;
+        ApplyLightStripButton.IsEnabled = canChangeLighting;
+        SystemAutoStartSwitch.IsEnabled = CanChangeSystemAutoStart();
         GearLightDeviceSetting.IsVisible = !IsBs1;
         GearLightSwitch.IsEnabled = canChangeDeviceFeatures && !IsBs1;
         PowerOnStartSwitch.IsEnabled = canChangeDeviceFeatures;
@@ -1089,9 +1786,10 @@ public partial class MainWindow : Window
         ResetLearnedOffsetsButton.IsEnabled = canEditFanCurve;
         ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurve.Count >= 2;
         FanCurvePreview.IsEditable = canEditFanCurve;
-        TimeCurveScheduleEnabledSwitch.IsEnabled = canEditFanCurve;
-        AddTimeCurveScheduleRuleButton.IsEnabled = canEditFanCurve && _fanCurveProfiles.Count > 0;
-        TimeCurveScheduleRulesPanel.IsEnabled = canEditFanCurve;
+        var canEditTimeCurveSchedule = canEditFanCurve && _timeCurveScheduleSupported;
+        TimeCurveScheduleEnabledSwitch.IsEnabled = canEditTimeCurveSchedule;
+        AddTimeCurveScheduleRuleButton.IsEnabled = canEditTimeCurveSchedule && _fanCurveProfiles.Count > 0;
+        TimeCurveScheduleRulesPanel.IsEnabled = !_timeCurveScheduleSupported || canEditFanCurve;
 
         var canManageTemperatureHistory = _ipc.IsConnected
             && _temperatureHistoryKnown
@@ -1364,30 +2062,53 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ApplyTimeCurveScheduleControls()
+    private void ApplyTimeCurveScheduleControls(bool force = false)
     {
         TimeCurveScheduleEnabledSwitch.IsChecked = _timeCurveSchedule.Enabled;
-        TimeCurveScheduleStateText.Text = !_ipc.IsConnected
-            ? "Waiting for THRM Core."
-            : _timeCurveSchedule.Rules.Count == 0
-                ? "Add a rule to let THRM Core switch profiles automatically."
-                : _timeCurveSchedule.Enabled
-                    ? "Core will apply the first matching rule automatically."
-                    : "Schedule is off; rules are saved but not applied.";
 
-        TimeCurveScheduleRulesPanel.Children.Clear();
-        foreach (var rule in _timeCurveSchedule.Rules)
+        var supported = _timeCurveScheduleSupported;
+        var needsVisualSync = force
+            || _renderedTimeCurveScheduleSupported != supported
+            || !TimeCurveScheduleState.Matches(_renderedTimeCurveSchedule, _timeCurveSchedule);
+        if (!_suppressTimeCurveScheduleVisualSync && needsVisualSync)
         {
-            TimeCurveScheduleRulesPanel.Children.Add(BuildTimeCurveScheduleRuleItem(rule));
+            TimeCurveScheduleRulesPanel.Children.Clear();
+            TimeCurveScheduleRulesHost.IsVisible = !supported || _timeCurveSchedule.Rules.Count > 0;
+            TimeCurveScheduleSupportText.IsVisible = !supported;
+            if (!supported)
+            {
+                TimeCurveScheduleRulesPanel.Children.Add(TimeCurveScheduleSupportText);
+            }
+            else
+            {
+                var ruleIndex = 0;
+                foreach (var rule in _timeCurveSchedule.Rules)
+                {
+                    if (ruleIndex++ > 0)
+                    {
+                        TimeCurveScheduleRulesPanel.Children.Add(new Separator());
+                    }
+
+                    TimeCurveScheduleRulesPanel.Children.Add(BuildTimeCurveScheduleRuleItem(rule));
+                }
+            }
+
+            _renderedTimeCurveSchedule = CloneTimeCurveSchedule(_timeCurveSchedule);
+            _renderedTimeCurveScheduleSupported = supported;
         }
 
-        var canEdit = CanEditFanCurve;
-        TimeCurveScheduleEnabledSwitch.IsEnabled = canEdit;
-        AddTimeCurveScheduleRuleButton.IsEnabled = canEdit && _fanCurveProfiles.Count > 0;
-        TimeCurveScheduleRulesPanel.IsEnabled = canEdit;
+        ApplyTimeCurveScheduleAvailability(supported);
     }
 
-    private FASettingsExpanderItem BuildTimeCurveScheduleRuleItem(TimeCurveScheduleRuleSnapshot rule)
+    private void ApplyTimeCurveScheduleAvailability(bool supported)
+    {
+        var canEdit = CanEditFanCurve && supported;
+        TimeCurveScheduleEnabledSwitch.IsEnabled = canEdit;
+        AddTimeCurveScheduleRuleButton.IsEnabled = canEdit && _fanCurveProfiles.Count > 0;
+        TimeCurveScheduleRulesPanel.IsEnabled = !supported || canEdit;
+    }
+
+    private Control BuildTimeCurveScheduleRuleItem(TimeCurveScheduleRuleSnapshot rule, bool animateEntry = false)
     {
         var nameBox = new TextBox
         {
@@ -1400,11 +2121,13 @@ public partial class MainWindow : Window
 
         var profileBox = new FAComboBox
         {
-            Width = 170,
+            Width = 144,
+            MaxDropDownHeight = 288,
             ItemsSource = _fanCurveProfiles.ToArray(),
             SelectedItem = _fanCurveProfiles.FirstOrDefault(profile =>
                 string.Equals(profile.Id, rule.CurveProfileId, StringComparison.Ordinal)),
         };
+        AttachComboBoxOpeningAnimation(profileBox);
         AutomationProperties.SetName(profileBox, $"Curve profile for {rule.Name}");
         profileBox.SelectionChanged += (_, _) => _ = SaveTimeCurveScheduleProfileAsync(rule.Id, profileBox);
 
@@ -1413,23 +2136,16 @@ public partial class MainWindow : Window
         startPicker.SelectedTimeChanged += (_, _) => _ = SaveTimeCurveScheduleTimeAsync(rule.Id, "startTime", startPicker);
         endPicker.SelectedTimeChanged += (_, _) => _ = SaveTimeCurveScheduleTimeAsync(rule.Id, "endTime", endPicker);
 
-        var fields = new WrapPanel
+        var enabledSwitch = new ToggleSwitch
         {
-            Orientation = Orientation.Horizontal,
-            ItemSpacing = 8,
-            LineSpacing = 8,
-            Children =
-            {
-                CreateScheduleField("Name", nameBox),
-                CreateScheduleField("Curve profile", profileBox),
-                CreateScheduleField("Start", startPicker),
-                CreateScheduleField("End", endPicker),
-            },
+            IsChecked = rule.Enabled,
+            VerticalAlignment = VerticalAlignment.Center,
         };
-
-        var enabledSwitch = new ToggleSwitch { IsChecked = rule.Enabled };
         AutomationProperties.SetName(enabledSwitch, $"Enable {rule.Name}");
-        enabledSwitch.Click += (_, _) => _ = SaveTimeCurveScheduleRuleEnabledAsync(rule.Id, enabledSwitch);
+        enabledSwitch.Click += (_, _) =>
+        {
+            _ = SaveTimeCurveScheduleRuleEnabledAsync(rule.Id, enabledSwitch);
+        };
 
         var deleteButton = new Button { Content = "Delete" };
         AutomationProperties.SetName(deleteButton, $"Delete {rule.Name}");
@@ -1442,7 +2158,6 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Children =
             {
-                new TextBlock { Text = "Enabled", VerticalAlignment = VerticalAlignment.Center },
                 enabledSwitch,
                 deleteButton,
             },
@@ -1454,11 +2169,6 @@ public partial class MainWindow : Window
             ItemSpacing = 6,
             LineSpacing = 6,
         };
-        weekdays.Children.Add(new TextBlock
-        {
-            Text = "Days",
-            VerticalAlignment = VerticalAlignment.Center,
-        });
         var selectedDays = NormalizeScheduleWeekdays(rule.Weekdays);
         foreach (var (day, label) in TimeCurveScheduleWeekdays)
         {
@@ -1474,35 +2184,166 @@ public partial class MainWindow : Window
             weekdays.Children.Add(toggle);
         }
 
-        var body = new StackPanel
+        var timeControls = new StackPanel
         {
-            Spacing = 10,
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
-                fields,
-                actions,
-                weekdays,
+                startPicker,
+                new TextBlock { Text = "to", VerticalAlignment = VerticalAlignment.Center },
+                endPicker,
             },
         };
 
-        return new FASettingsExpanderItem
+        var form = new Grid
         {
-            Content = rule.Name,
-            Description = $"{rule.StartTime}–{rule.EndTime}",
-            Footer = body,
-            IsEnabled = CanEditFanCurve,
+            ColumnDefinitions = new ColumnDefinitions
+            {
+                new ColumnDefinition(GridLength.Auto),
+                new ColumnDefinition(GridLength.Star),
+            },
+            RowDefinitions = new RowDefinitions
+            {
+                new RowDefinition(GridLength.Auto),
+                new RowDefinition(GridLength.Auto),
+                new RowDefinition(GridLength.Auto),
+                new RowDefinition(GridLength.Auto),
+                new RowDefinition(GridLength.Auto),
+            },
+            ColumnSpacing = 12,
+            RowSpacing = 10,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+
+        AddScheduleFormRow(form, 0, "Rule name", nameBox);
+        AddScheduleFormRow(form, 1, "Profile", profileBox);
+        AddScheduleFormRow(form, 2, "Time", timeControls);
+        AddScheduleFormRow(form, 3, "Days", weekdays);
+        Grid.SetColumn(actions, 1);
+        Grid.SetRow(actions, 4);
+        actions.HorizontalAlignment = HorizontalAlignment.Right;
+        form.Children.Add(actions);
+
+        var item = new StackPanel
+        {
+            Spacing = 10,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Tag = rule.Id,
+            Children =
+            {
+                form,
+            },
+        };
+        if (animateEntry)
+        {
+            AnimateTimeCurveScheduleRuleEntry(item);
+        }
+
+        return item;
+    }
+
+    private void AppendTimeCurveScheduleRule(TimeCurveScheduleRuleSnapshot rule)
+    {
+        if (!_timeCurveScheduleSupported
+            || TimeCurveScheduleRulesPanel.Children.OfType<Control>().Any(item =>
+                item.Tag is string id && string.Equals(id, rule.Id, StringComparison.Ordinal)))
+        {
+            ApplyTimeCurveScheduleControls(force: true);
+            return;
+        }
+
+        if (TimeCurveScheduleRulesPanel.Children.Contains(TimeCurveScheduleSupportText))
+        {
+            TimeCurveScheduleRulesPanel.Children.Clear();
+        }
+
+        TimeCurveScheduleRulesHost.IsVisible = true;
+        TimeCurveScheduleSupportText.IsVisible = false;
+        if (TimeCurveScheduleRulesPanel.Children.Count > 0)
+        {
+            TimeCurveScheduleRulesPanel.Children.Add(new Separator());
+        }
+
+        TimeCurveScheduleRulesPanel.Children.Add(BuildTimeCurveScheduleRuleItem(rule, animateEntry: true));
+        _renderedTimeCurveSchedule = CloneTimeCurveSchedule(_timeCurveSchedule);
+        _renderedTimeCurveScheduleSupported = true;
+        ApplyTimeCurveScheduleAvailability(supported: true);
+    }
+
+    private void RemoveTimeCurveScheduleRule(string ruleId)
+    {
+        var ruleItem = TimeCurveScheduleRulesPanel.Children.OfType<Control>().FirstOrDefault(item =>
+            item.Tag is string id && string.Equals(id, ruleId, StringComparison.Ordinal));
+        if (ruleItem is null)
+        {
+            ApplyTimeCurveScheduleControls(force: true);
+            return;
+        }
+
+        var index = TimeCurveScheduleRulesPanel.Children.IndexOf(ruleItem);
+        if (index > 0 && TimeCurveScheduleRulesPanel.Children[index - 1] is Separator)
+        {
+            TimeCurveScheduleRulesPanel.Children.RemoveAt(index - 1);
+            TimeCurveScheduleRulesPanel.Children.Remove(ruleItem);
+        }
+        else
+        {
+            TimeCurveScheduleRulesPanel.Children.Remove(ruleItem);
+            if (index < TimeCurveScheduleRulesPanel.Children.Count
+                && TimeCurveScheduleRulesPanel.Children[index] is Separator)
+            {
+                TimeCurveScheduleRulesPanel.Children.RemoveAt(index);
+            }
+        }
+
+        TimeCurveScheduleRulesHost.IsVisible = _timeCurveSchedule.Rules.Count > 0;
+        _renderedTimeCurveSchedule = CloneTimeCurveSchedule(_timeCurveSchedule);
+        _renderedTimeCurveScheduleSupported = _timeCurveScheduleSupported;
+        ApplyTimeCurveScheduleAvailability(_timeCurveScheduleSupported);
+    }
+
+    private static void AnimateTimeCurveScheduleRuleEntry(Control item)
+    {
+        item.Opacity = 0;
+        item.RenderTransform = TransformOperations.Parse("translate(0px, -6px)");
+        item.Transitions = CreateFlyoutTransitions();
+        var started = false;
+        item.AttachedToVisualTree += (_, _) =>
+        {
+            if (started)
+            {
+                return;
+            }
+
+            started = true;
+            Dispatcher.UIThread.Post(() =>
+            {
+                item.Opacity = 1;
+                item.RenderTransform = TransformOperations.Identity;
+            }, DispatcherPriority.Render);
         };
     }
 
-    private static StackPanel CreateScheduleField(string label, Control control) => new()
+    private static void AddScheduleFormRow(Grid form, int row, string label, Control control)
     {
-        Spacing = 4,
-        Children =
+        var labelText = new TextBlock
         {
-            new TextBlock { Text = label, FontSize = 11 },
-            control,
-        },
-    };
+            Text = label,
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(labelText, 0);
+        Grid.SetRow(labelText, row);
+        form.Children.Add(labelText);
+
+        control.VerticalAlignment = VerticalAlignment.Center;
+        control.HorizontalAlignment = HorizontalAlignment.Left;
+        Grid.SetColumn(control, 1);
+        Grid.SetRow(control, row);
+        form.Children.Add(control);
+    }
 
     private static TimePicker CreateScheduleTimePicker(
         TimeCurveScheduleRuleSnapshot rule,
@@ -1523,7 +2364,7 @@ public partial class MainWindow : Window
 
     private async void TimeCurveScheduleEnabledClick(object? sender, RoutedEventArgs e)
     {
-        if (_updatingConfigControls || !CanEditFanCurve)
+        if (_updatingConfigControls || !CanEditFanCurve || !_timeCurveScheduleSupported)
         {
             TimeCurveScheduleEnabledSwitch.IsChecked = _timeCurveSchedule.Enabled;
             return;
@@ -1540,14 +2381,14 @@ public partial class MainWindow : Window
 
     private async void AddTimeCurveScheduleRuleClick(object? sender, RoutedEventArgs e)
     {
-        if (!CanEditFanCurve || _fanCurveProfiles.Count == 0)
+        if (!CanEditFanCurve || !_timeCurveScheduleSupported || _fanCurveProfiles.Count == 0)
         {
             return;
         }
 
         var profileId = _activeFanCurveProfileId ?? _fanCurveProfiles[0].Id;
         var next = CloneTimeCurveSchedule(_timeCurveSchedule);
-        next.Rules.Add(new TimeCurveScheduleRuleSnapshot
+        var rule = new TimeCurveScheduleRuleSnapshot
         {
             Id = Guid.NewGuid().ToString("D"),
             Name = $"Rule {next.Rules.Count + 1}",
@@ -1556,13 +2397,25 @@ public partial class MainWindow : Window
             StartTime = "22:00",
             EndTime = "06:00",
             CurveProfileId = profileId,
-        });
-        await SaveTimeCurveScheduleAsync(next);
+        };
+        next.Rules.Add(rule);
+        if (await SaveTimeCurveScheduleAsync(next, deferVisualSync: true))
+        {
+            var confirmedRule = _timeCurveSchedule.Rules.FirstOrDefault(item =>
+                string.Equals(item.Id, rule.Id, StringComparison.Ordinal));
+            if (confirmedRule is null)
+            {
+                ApplyTimeCurveScheduleControls(force: true);
+                return;
+            }
+
+            AppendTimeCurveScheduleRule(confirmedRule);
+        }
     }
 
     private async Task CommitTimeCurveScheduleNameAsync(string ruleId, TextBox nameBox)
     {
-        if (_updatingConfigControls || !CanEditFanCurve)
+        if (_updatingConfigControls || !CanEditFanCurve || !_timeCurveScheduleSupported)
         {
             return;
         }
@@ -1586,14 +2439,14 @@ public partial class MainWindow : Window
 
     private async Task SaveTimeCurveScheduleProfileAsync(string ruleId, FAComboBox profileBox)
     {
-        if (_updatingConfigControls || !CanEditFanCurve)
+        if (_updatingConfigControls || !CanEditFanCurve || !_timeCurveScheduleSupported)
         {
             return;
         }
 
         if (profileBox.SelectedItem is not FanCurveProfileSnapshot profile)
         {
-            ApplyTimeCurveScheduleControls();
+            ApplyTimeCurveScheduleControls(force: true);
             return;
         }
 
@@ -1603,7 +2456,7 @@ public partial class MainWindow : Window
 
     private async Task SaveTimeCurveScheduleTimeAsync(string ruleId, string field, TimePicker picker)
     {
-        if (_updatingConfigControls || !CanEditFanCurve || picker.SelectedTime is null)
+        if (_updatingConfigControls || !CanEditFanCurve || !_timeCurveScheduleSupported || picker.SelectedTime is null)
         {
             return;
         }
@@ -1618,7 +2471,7 @@ public partial class MainWindow : Window
 
     private async Task SaveTimeCurveScheduleRuleEnabledAsync(string ruleId, ToggleSwitch enabledSwitch)
     {
-        if (_updatingConfigControls || !CanEditFanCurve)
+        if (_updatingConfigControls || !CanEditFanCurve || !_timeCurveScheduleSupported)
         {
             return;
         }
@@ -1636,9 +2489,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_updatingConfigControls || !CanEditFanCurve)
+        if (_updatingConfigControls || !CanEditFanCurve || !_timeCurveScheduleSupported)
         {
-            ApplyTimeCurveScheduleControls();
+            ApplyTimeCurveScheduleControls(force: true);
             return;
         }
 
@@ -1675,29 +2528,83 @@ public partial class MainWindow : Window
 
     private async Task DeleteTimeCurveScheduleRuleAsync(string ruleId)
     {
-        if (!CanEditFanCurve)
+        if (!CanEditFanCurve || !_timeCurveScheduleSupported)
         {
             return;
         }
 
         var next = CloneTimeCurveSchedule(_timeCurveSchedule);
         next.Rules.RemoveAll(rule => rule.Id == ruleId);
-        await SaveTimeCurveScheduleAsync(next);
+        if (await SaveTimeCurveScheduleAsync(next, deferVisualSync: true))
+        {
+            RemoveTimeCurveScheduleRule(ruleId);
+        }
     }
 
-    private async Task<bool> SaveTimeCurveScheduleAsync(TimeCurveScheduleSnapshot schedule)
+    private async Task<bool> SaveTimeCurveScheduleAsync(
+        TimeCurveScheduleSnapshot schedule,
+        bool deferVisualSync = false)
     {
-        var saved = await RunWriteAsync(
-            "Save time curve schedule",
-            () => _ipc.SetTimeCurveScheduleAsync(schedule, _lifetime.Token));
+        _suppressTimeCurveScheduleVisualSync = true;
+        var saved = false;
+        try
+        {
+            saved = await RunWriteAsync(
+                "Save time curve schedule",
+                () => SaveTimeCurveScheduleViaConfigUpdateAsync(schedule));
+            if (saved)
+            {
+                await RefreshFanCurveAsync();
+            }
+        }
+        finally
+        {
+            _suppressTimeCurveScheduleVisualSync = false;
+        }
+
         if (!saved)
         {
-            ApplyTimeCurveScheduleControls();
+            ApplyTimeCurveScheduleControls(force: true);
             return false;
         }
 
-        await RefreshFanCurveAsync();
+        if (!deferVisualSync)
+        {
+            if (TimeCurveScheduleState.Matches(_timeCurveSchedule, schedule))
+            {
+                _renderedTimeCurveSchedule = CloneTimeCurveSchedule(_timeCurveSchedule);
+                _renderedTimeCurveScheduleSupported = _timeCurveScheduleSupported;
+            }
+            else
+            {
+                ApplyTimeCurveScheduleControls(force: true);
+            }
+        }
+
         return true;
+    }
+
+    private async Task<bool> SaveTimeCurveScheduleViaConfigUpdateAsync(TimeCurveScheduleSnapshot schedule)
+    {
+        var config = await GetFreshConfigJsonForScheduleAsync();
+        var updatedConfig = TimeCurveScheduleConfigJson.ReplaceTimeCurveSchedule(config, schedule);
+        return await _ipc.UpdateConfigAsync(updatedConfig, _lifetime.Token);
+    }
+
+    private async Task<JsonElement> GetFreshConfigJsonForScheduleAsync()
+    {
+        var configJson = await _ipc.GetConfigJsonAsync(_lifetime.Token);
+        if (configJson.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("GetConfig response was not a JSON object.");
+        }
+
+        if (!configJson.TryGetProperty("timeCurveSchedule", out _))
+        {
+            throw new InvalidOperationException("Time curve schedules are not available in the current Core configuration.");
+        }
+
+        return configJson.Clone();
     }
 
     private TimeCurveScheduleSnapshot UpdateTimeCurveScheduleRule(
@@ -1781,9 +2688,15 @@ public partial class MainWindow : Window
     {
         var summary = LearnedOffsetSummary.Build(_fanCurve, _learnedFanCurveOffsets, _fanCurveLearningBias);
         LearnedOffsetsSummaryPanel.Children.Clear();
-        LearnedOffsetsSummaryText.Text = summary.Count == 0
-            ? "No learned offsets for the active curve."
-            : "Largest active corrections:";
+        if (summary.Count == 0)
+        {
+            LearnedOffsetsSummaryPanel.Children.Add(new TextBlock
+            {
+                Text = "No learned offsets for the active curve.",
+                Opacity = 0.78,
+            });
+            return;
+        }
 
         foreach (var entry in summary)
         {
@@ -2095,7 +3008,16 @@ public partial class MainWindow : Window
     private static void SelectCoreValue(ComboBox comboBox, string[] values, string? value) =>
         comboBox.SelectedIndex = value is null ? -1 : Array.IndexOf(values, value);
 
+    private static void SelectCoreValue(FAComboBox comboBox, string[] values, string? value) =>
+        comboBox.SelectedIndex = value is null ? -1 : Array.IndexOf(values, value);
+
     private static string? SelectedCoreValue(ComboBox comboBox, string[] values)
+    {
+        var index = comboBox.SelectedIndex;
+        return index >= 0 && index < values.Length ? values[index] : null;
+    }
+
+    private static string? SelectedCoreValue(FAComboBox comboBox, string[] values)
     {
         var index = comboBox.SelectedIndex;
         return index >= 0 && index < values.Length ? values[index] : null;

@@ -84,6 +84,8 @@
                                          ActionIconSource="{TemplateBinding ActionIconSource}"
                                          Footer="{TemplateBinding Footer}"
                                          FooterTemplate="{TemplateBinding FooterTemplate}"
+                                         HorizontalAlignment="Stretch"
+                                         HorizontalContentAlignment="Stretch"
                                          Padding="{DynamicResource SettingsExpanderPadding}"
                                          Background="Transparent"
                                          Name="ContentHost" />
@@ -102,6 +104,14 @@
   </Window.Resources>
 
   <Window.Styles>
+    <Style Selector=".compact-settings-combo"
+           x:SetterTargetType="ui:FAComboBox">
+      <Setter Property="Width" Value="192" />
+      <Setter Property="MaxDropDownHeight" Value="288" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
     <Style Selector="ScrollViewer.page-scroll">
       <Setter Property="IsScrollChainingEnabled" Value="True" />
       <Setter Property="IsScrollInertiaEnabled" Value="True" />
@@ -142,6 +152,11 @@
         <ui:FANavigationViewItem Content="Device settings" Tag="device-settings">
           <ui:FANavigationViewItem.IconSource>
             <icons:FluentIconSource Icon="PlugConnected" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="System settings" Tag="system">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="Settings" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
       </ui:FANavigationView.MenuItems>
@@ -344,26 +359,6 @@
                                      HorizontalAlignment="Stretch"
                                      IsEnabled="False"
                                      SelectionChanged="FanCurveProfileSelectionChanged">
-                        <ui:FAComboBox.Styles>
-                          <Style Selector="#FanCurveProfileComboBox /template/ Border#PopupBorder">
-                            <Setter Property="Opacity" Value="0" />
-                            <Setter Property="RenderTransform" Value="translate(0px, -6px)" />
-                            <Setter Property="Transitions">
-                              <Transitions>
-                                <DoubleTransition Property="Opacity"
-                                                  Duration="00:00:00.150"
-                                                  Easing="CubicEaseOut" />
-                                <TransformOperationsTransition Property="RenderTransform"
-                                                               Duration="00:00:00.180"
-                                                               Easing="CubicEaseOut" />
-                              </Transitions>
-                            </Setter>
-                          </Style>
-                          <Style Selector="#FanCurveProfileComboBox:dropdownopen /template/ Border#PopupBorder">
-                            <Setter Property="Opacity" Value="1" />
-                            <Setter Property="RenderTransform" Value="translate(0px, 0px)" />
-                          </Style>
-                        </ui:FAComboBox.Styles>
                       </ui:FAComboBox>
                       <Button x:Name="FanCurveProfileManageButton"
                               Grid.Column="1"
@@ -434,33 +429,31 @@
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="History" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Content="Automatic switching"
-                                           Description="Core applies the first enabled rule that matches the current time.">
-                  <ui:FASettingsExpanderItem.Footer>
-                    <Grid ColumnDefinitions="*,Auto,Auto"
-                          ColumnSpacing="8">
-                      <TextBlock x:Name="TimeCurveScheduleStateText"
-                                 VerticalAlignment="Center"
-                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                 Text="Waiting for THRM Core."
-                                 TextWrapping="Wrap" />
-                      <Button x:Name="AddTimeCurveScheduleRuleButton"
-                              Grid.Column="1"
-                              Content="Add rule"
-                              Click="AddTimeCurveScheduleRuleClick"
-                              IsEnabled="False" />
-                      <ToggleSwitch x:Name="TimeCurveScheduleEnabledSwitch"
-                                    Grid.Column="2"
-                                    IsEnabled="False"
-                                    Click="TimeCurveScheduleEnabledClick" />
-                    </Grid>
-                  </ui:FASettingsExpanderItem.Footer>
+                <ui:FASettingsExpander.Footer>
+                  <ToggleSwitch x:Name="TimeCurveScheduleEnabledSwitch"
+                                AutomationProperties.Name="Enable time curve schedule"
+                                VerticalAlignment="Center"
+                                IsEnabled="False"
+                                Click="TimeCurveScheduleEnabledClick" />
+                </ui:FASettingsExpander.Footer>
+                <ui:FASettingsExpanderItem x:Name="TimeCurveScheduleRulesHost">
+                  <StackPanel x:Name="TimeCurveScheduleRulesPanel"
+                              Spacing="8">
+                    <TextBlock x:Name="TimeCurveScheduleSupportText"
+                               IsVisible="False"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Text="Please update or restart THRM Core to use time curve schedules." />
+                  </StackPanel>
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Rules"
-                                           Description="Choose a profile, time window, and Monday–Sunday coverage for each rule.">
+                <ui:FASettingsExpanderItem Content="Add rule"
+                                           Description="Create a profile switch for a time window and selected weekdays.">
                   <ui:FASettingsExpanderItem.Footer>
-                    <StackPanel x:Name="TimeCurveScheduleRulesPanel"
-                                Spacing="8" />
+                    <Button x:Name="AddTimeCurveScheduleRuleButton"
+                            Content="Add rule"
+                            HorizontalAlignment="Right"
+                            Click="AddTimeCurveScheduleRuleClick"
+                            IsEnabled="False" />
                   </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
@@ -472,19 +465,16 @@
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="BrainCircuit" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Content="Learned offsets"
-                                           Description="Largest active corrections from the current base curve.">
+                <ui:FASettingsExpanderItem Content="Largest active corrections">
+                  <ui:FASettingsExpanderItem.Resources>
+                    <x:Double x:Key="SettingsExpanderItemAdaptiveWidthTrigger">10000</x:Double>
+                    <Thickness x:Key="SettingsExpanderItemBottomFooterMargin">42,8,0,0</Thickness>
+                  </ui:FASettingsExpanderItem.Resources>
                   <ui:FASettingsExpanderItem.Footer>
-                    <StackPanel Spacing="6">
-                      <TextBlock x:Name="LearnedOffsetsSummaryText"
-                                 Text="No learned offsets for the active curve."
-                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                 TextWrapping="Wrap" />
-                      <WrapPanel x:Name="LearnedOffsetsSummaryPanel"
-                                 Orientation="Horizontal"
-                                 ItemSpacing="12"
-                                 LineSpacing="6" />
-                    </StackPanel>
+                    <WrapPanel x:Name="LearnedOffsetsSummaryPanel"
+                               Orientation="Horizontal"
+                               ItemSpacing="12"
+                               LineSpacing="6" />
                   </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Reset learned offsets"
@@ -529,17 +519,19 @@
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Retention"
                                            Description="Choose how long THRM Core retains recorded samples.">
-                  <ComboBox x:Name="TemperatureHistoryRetentionComboBox"
-                            HorizontalAlignment="Stretch"
-                            IsEnabled="False"
-                            SelectionChanged="TemperatureHistoryRetentionSelectionChanged">
-                    <ComboBoxItem Content="1 hour" />
-                    <ComboBoxItem Content="2 hours" />
-                    <ComboBoxItem Content="3 hours" />
-                    <ComboBoxItem Content="6 hours" />
-                    <ComboBoxItem Content="12 hours" />
-                    <ComboBoxItem Content="24 hours" />
-                  </ComboBox>
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="TemperatureHistoryRetentionComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="TemperatureHistoryRetentionSelectionChanged">
+                      <ui:FAComboBoxItem Content="1 hour" />
+                      <ui:FAComboBoxItem Content="2 hours" />
+                      <ui:FAComboBoxItem Content="3 hours" />
+                      <ui:FAComboBoxItem Content="6 hours" />
+                      <ui:FAComboBoxItem Content="12 hours" />
+                      <ui:FAComboBoxItem Content="24 hours" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Current availability.">
                   <TextBlock x:Name="TemperatureHistoryStateText"
@@ -703,38 +695,35 @@
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="Temperature" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Description="Select a preset.">
-                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-                    <TextBlock Text="Gear preset" VerticalAlignment="Center" />
-                    <ComboBox x:Name="ManualGearComboBox"
-                              Grid.Column="1"
-                              HorizontalAlignment="Stretch"
-                              SelectedIndex="-1"
-                              IsEnabled="False"
-                              SelectionChanged="ManualSelectionChanged">
-                      <ComboBoxItem Content="Quiet" />
-                      <ComboBoxItem Content="Standard" />
-                      <ComboBoxItem Content="Strong" />
-                      <ComboBoxItem Content="Overclock" />
-                    </ComboBox>
-                  </Grid>
+                <ui:FASettingsExpanderItem Content="Gear preset"
+                                           Description="Select a preset.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="ManualGearComboBox"
+                                   Classes="compact-settings-combo"
+                                   SelectedIndex="-1"
+                                   IsEnabled="False"
+                                   SelectionChanged="ManualSelectionChanged">
+                      <ui:FAComboBoxItem Content="Quiet" />
+                      <ui:FAComboBoxItem Content="Standard" />
+                      <ui:FAComboBoxItem Content="Strong" />
+                      <ui:FAComboBoxItem Content="Overclock" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Select a level when supported.">
-                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-                    <TextBlock x:Name="ManualLevelLabel"
-                               Text="Level"
-                               VerticalAlignment="Center" />
-                    <ComboBox x:Name="ManualLevelComboBox"
-                              Grid.Column="1"
-                              HorizontalAlignment="Stretch"
-                              SelectedIndex="-1"
-                              IsEnabled="False"
-                              SelectionChanged="ManualSelectionChanged">
-                      <ComboBoxItem Content="Low" />
-                      <ComboBoxItem Content="Medium" />
-                      <ComboBoxItem Content="High" />
-                    </ComboBox>
-                  </Grid>
+                <ui:FASettingsExpanderItem x:Name="ManualLevelSetting"
+                                           Content="Level"
+                                           Description="Select a level when supported.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="ManualLevelComboBox"
+                                   Classes="compact-settings-combo"
+                                   SelectedIndex="-1"
+                                   IsEnabled="False"
+                                   SelectionChanged="ManualSelectionChanged">
+                      <ui:FAComboBoxItem Content="Low" />
+                      <ui:FAComboBoxItem Content="Medium" />
+                      <ui:FAComboBoxItem Content="High" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Send the selected values to Core.">
                   <Button x:Name="ApplyManualGearButton"
@@ -796,6 +785,138 @@
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
 
+              <ui:FASettingsExpander x:Name="LightingDeviceExpander"
+                                     Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Lighting effects"
+                                     Description="Stage supported light-strip effects and apply them to the connected device."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Lightbulb" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Effect mode"
+                                           Description="Choose how the device lighting behaves.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="LightModeComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="LightModeSelectionChanged">
+                      <ui:FAComboBoxItem Content="Off" />
+                      <ui:FAComboBoxItem Content="Smart temperature" />
+                      <ui:FAComboBoxItem Content="Static color" />
+                      <ui:FAComboBoxItem Content="Multicolor" />
+                      <ui:FAComboBoxItem Content="Rotation" />
+                      <ui:FAComboBoxItem Content="Flowing" />
+                      <ui:FAComboBoxItem Content="Breathing" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Animation speed"
+                                           Description="Available for animated effects.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="LightSpeedComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="LightSpeedSelectionChanged">
+                      <ui:FAComboBoxItem Content="Fast" />
+                      <ui:FAComboBoxItem Content="Medium" />
+                      <ui:FAComboBoxItem Content="Slow" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Brightness"
+                                           Description="Set the light-strip brightness.">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <Slider x:Name="LightBrightnessSlider"
+                            Minimum="0"
+                            Maximum="100"
+                            TickFrequency="1"
+                            IsSnapToTickEnabled="True"
+                            IsEnabled="False"
+                            ValueChanged="LightBrightnessValueChanged" />
+                    <TextBlock x:Name="LightBrightnessValueText"
+                               Grid.Column="1"
+                               Width="48"
+                               Text="100%"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center" />
+                  </Grid>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LightSmartTemperatureDeviceSetting"
+                                           Description="Smart temperature owns the colors and brightness automatically.">
+                  <ui:FAInfoBar x:Name="LightSmartTemperatureInfoBar"
+                                IsOpen="False"
+                                IsClosable="False"
+                                Severity="Informational"
+                                Title="Smart temperature"
+                                Message="Core owns the colors and brightness while this mode is active." />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LightColorsDeviceSetting"
+                                           Content="Colors"
+                                           Description="Choose a preset or edit each required color.">
+                  <StackPanel Spacing="10">
+                    <WrapPanel x:Name="LightColorPresetPanel"
+                               ItemSpacing="8"
+                               LineSpacing="8"
+                               IsEnabled="False">
+                      <Button Content="Neon"
+                              Tag="neon"
+                              Click="LightPresetClick"
+                              AutomationProperties.Name="Apply Neon lighting preset" />
+                      <Button Content="Forest"
+                              Tag="forest"
+                              Click="LightPresetClick"
+                              AutomationProperties.Name="Apply Forest lighting preset" />
+                      <Button Content="Glacier"
+                              Tag="glacier"
+                              Click="LightPresetClick"
+                              AutomationProperties.Name="Apply Glacier lighting preset" />
+                    </WrapPanel>
+                    <WrapPanel ItemSpacing="12" LineSpacing="10">
+                      <StackPanel x:Name="LightColorSlot0" Width="176" Spacing="4">
+                        <TextBlock Text="Color 1" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <ColorPicker x:Name="LightColorPicker0"
+                                     Color="#FFFF0000"
+                                     IsAlphaEnabled="False"
+                                     IsEnabled="False"
+                                     HorizontalAlignment="Stretch"
+                                     AutomationProperties.Name="Lighting color 1"
+                                     ColorChanged="LightColorChanged" />
+                      </StackPanel>
+                      <StackPanel x:Name="LightColorSlot1" Width="176" Spacing="4">
+                        <TextBlock Text="Color 2" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <ColorPicker x:Name="LightColorPicker1"
+                                     Color="#FF00FF00"
+                                     IsAlphaEnabled="False"
+                                     IsEnabled="False"
+                                     HorizontalAlignment="Stretch"
+                                     AutomationProperties.Name="Lighting color 2"
+                                     ColorChanged="LightColorChanged" />
+                      </StackPanel>
+                      <StackPanel x:Name="LightColorSlot2" Width="176" Spacing="4">
+                        <TextBlock Text="Color 3" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <ColorPicker x:Name="LightColorPicker2"
+                                     Color="#FF0080FF"
+                                     IsAlphaEnabled="False"
+                                     IsEnabled="False"
+                                     HorizontalAlignment="Stretch"
+                                     AutomationProperties.Name="Lighting color 3"
+                                     ColorChanged="LightColorChanged" />
+                      </StackPanel>
+                    </WrapPanel>
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Apply lighting"
+                                           Description="Changes remain local until you explicitly apply them to THRM Core.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Button x:Name="ApplyLightStripButton"
+                            Classes="accent"
+                            Content="Apply lighting"
+                            IsEnabled="False"
+                            Click="ApplyLightStripClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Hardware behavior"
                                      Description="Configure supported device behavior while the device is connected."
@@ -823,20 +944,74 @@
                 <ui:FASettingsExpanderItem x:Name="SmartStartStopDeviceSetting"
                                            Content="Smart start and stop"
                                            Description="Choose when supported devices react to temperature changes.">
-                  <ComboBox x:Name="SmartStartStopComboBox"
-                            HorizontalAlignment="Stretch"
-                            IsEnabled="False"
-                            SelectionChanged="SmartStartStopSelectionChanged">
-                    <ComboBoxItem Content="Off" />
-                    <ComboBoxItem Content="Start immediately" />
-                    <ComboBoxItem Content="Start after delay" />
-                  </ComboBox>
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="SmartStartStopComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="SmartStartStopSelectionChanged">
+                      <ui:FAComboBoxItem Content="Off" />
+                      <ui:FAComboBoxItem Content="Start immediately" />
+                      <ui:FAComboBoxItem Content="Start after delay" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Current availability.">
                   <TextBlock x:Name="DeviceFeaturesStatusText"
                              Text="Device features are waiting for synchronized Core state."
                              Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                              TextWrapping="Wrap" />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+            </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="SystemPage"
+                        Classes="page-scroll"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="System settings" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Configure system-level THRM behavior without changing device settings."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Startup"
+                                     Description="Start THRM automatically when you sign in."
+                                     IsExpanded="True">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Settings" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem x:Name="SystemAutoStartSetting"
+                                           Content="Start THRM when I sign in"
+                                           Description="The startup method is selected automatically for this platform and permission level.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="SystemAutoStartSwitch"
+                                  IsEnabled="False"
+                                  Click="SystemAutoStartClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Description="Current startup state and method.">
+                  <StackPanel Spacing="4">
+                    <TextBlock x:Name="SystemAutoStartStateText"
+                               Text="Waiting for THRM Core."
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="SystemAutoStartMethodText"
+                               Text="Current method: —"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="SystemAutoStartInfoSetting"
+                                           IsVisible="False">
+                  <ui:FAInfoBar x:Name="SystemAutoStartInfoBar"
+                                IsOpen="False"
+                                IsClosable="False"
+                                Severity="Warning"
+                                Title="Startup unavailable"
+                                Message="Waiting for THRM Core." />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
@@ -866,7 +1041,7 @@
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Description="Remaining legacy features.">
-                  <TextBlock Text="Curve profile management, timeline markers, noise calibration, lighting, sensor selection, and system settings remain in the legacy Wails frontend."
+                  <TextBlock Text="Noise calibration, sensor selection, and other system settings remain in the legacy Wails frontend."
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>

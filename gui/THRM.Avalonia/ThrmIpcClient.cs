@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace THRM.Avalonia;
@@ -120,6 +121,14 @@ public sealed class ThrmIpcClient : IDisposable
     public Task<ConfigSnapshot> GetConfigAsync(CancellationToken cancellationToken = default) =>
         SendRequestAsync<ConfigSnapshot>("GetConfig", null, cancellationToken);
 
+    public Task<JsonElement> GetConfigJsonAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<JsonElement>("GetConfig", null, cancellationToken);
+
+    public Task<bool> UpdateConfigAsync(
+        JsonElement config,
+        CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("UpdateConfig", config, cancellationToken);
+
     public Task<DeviceStatusSnapshot> GetDeviceStatusAsync(CancellationToken cancellationToken = default) =>
         SendRequestAsync<DeviceStatusSnapshot>("GetDeviceStatus", null, cancellationToken);
 
@@ -156,6 +165,26 @@ public sealed class ThrmIpcClient : IDisposable
     public Task<bool> SetGearLightAsync(bool enabled, CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("SetGearLight", new { enabled }, cancellationToken);
 
+    public Task<bool> SetLightStripAsync(
+        LightStripSnapshot config,
+        CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetLightStrip", new { config }, cancellationToken);
+
+    public Task<bool> CheckWindowsAutoStartAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("CheckWindowsAutoStart", null, cancellationToken);
+
+    public Task<string> GetAutoStartMethodAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<string>("GetAutoStartMethod", null, cancellationToken);
+
+    public Task<bool> IsRunningAsAdminAsync(CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("IsRunningAsAdmin", null, cancellationToken);
+
+    public Task<bool> SetAutoStartWithMethodAsync(
+        bool enable,
+        string method,
+        CancellationToken cancellationToken = default) =>
+        SendRequestAsync<bool>("SetAutoStartWithMethod", new { enable, method }, cancellationToken);
+
     public Task<bool> SetPowerOnStartAsync(bool enabled, CancellationToken cancellationToken = default) =>
         SendRequestAsync<bool>("SetPowerOnStart", new { enabled }, cancellationToken);
 
@@ -173,11 +202,6 @@ public sealed class ThrmIpcClient : IDisposable
 
     public Task<FanCurveProfileSnapshot> SetActiveFanCurveProfileAsync(string id, CancellationToken cancellationToken = default) =>
         SendRequestAsync<FanCurveProfileSnapshot>("SetActiveFanCurveProfile", new { id }, cancellationToken);
-
-    public Task<bool> SetTimeCurveScheduleAsync(
-        TimeCurveScheduleSnapshot schedule,
-        CancellationToken cancellationToken = default) =>
-        SendRequestAsync<bool>("SetTimeCurveSchedule", schedule, cancellationToken);
 
     public Task<FanCurveProfileSnapshot> SaveFanCurveProfileAsync(
         string id,
@@ -604,6 +628,28 @@ internal sealed class IpcResponse
     public JsonElement? Data { get; init; }
 }
 
+internal static class TimeCurveScheduleConfigJson
+{
+    public static JsonElement ReplaceTimeCurveSchedule(
+        JsonElement config,
+        TimeCurveScheduleSnapshot schedule)
+    {
+        if (config.ValueKind != JsonValueKind.Object
+            || JsonNode.Parse(config.GetRawText()) is not JsonObject root)
+        {
+            throw new JsonException("Core configuration must be a JSON object.");
+        }
+
+        root["timeCurveSchedule"] = JsonSerializer.SerializeToNode(
+            schedule,
+            ThrmIpcClient.JsonOptions)
+            ?? throw new JsonException("Time curve schedule could not be serialized.");
+
+        using var document = JsonDocument.Parse(root.ToJsonString(ThrmIpcClient.JsonOptions));
+        return document.RootElement.Clone();
+    }
+}
+
 public sealed class ConfigSnapshot
 {
     [JsonPropertyName("autoControl")] public bool AutoControl { get; init; }
@@ -616,6 +662,22 @@ public sealed class ConfigSnapshot
     [JsonPropertyName("smartStartStop")] public string? SmartStartStop { get; init; }
     [JsonPropertyName("smartControl")] public SmartControlSnapshot? SmartControl { get; init; }
     [JsonPropertyName("timeCurveSchedule")] public TimeCurveScheduleSnapshot? TimeCurveSchedule { get; init; }
+    [JsonPropertyName("lightStrip")] public LightStripSnapshot? LightStrip { get; init; }
+}
+
+public sealed class LightStripSnapshot
+{
+    [JsonPropertyName("mode")] public string Mode { get; init; } = "smart_temp";
+    [JsonPropertyName("speed")] public string Speed { get; init; } = "medium";
+    [JsonPropertyName("brightness")] public int Brightness { get; init; } = 100;
+    [JsonPropertyName("colors")] public List<LightRgbSnapshot> Colors { get; init; } = [];
+}
+
+public sealed class LightRgbSnapshot
+{
+    [JsonPropertyName("r")] public byte R { get; init; }
+    [JsonPropertyName("g")] public byte G { get; init; }
+    [JsonPropertyName("b")] public byte B { get; init; }
 }
 
 public sealed class SmartControlSnapshot
@@ -723,6 +785,8 @@ internal static class IpcProtocolSelfCheck
 {
     public static void Run()
     {
+        LightStripLogic.SelfCheck();
+
         var line = ThrmIpcClient.BuildRequestLine("Ping", null, "self-check");
         if (!line.EndsWith('\n') || !line.Contains("\"type\":\"Ping\"", StringComparison.Ordinal))
         {
@@ -805,6 +869,57 @@ internal static class IpcProtocolSelfCheck
             || smartStartStopData.GetProperty("value").GetString() != "delayed")
         {
             throw new InvalidOperationException("SetSmartStartStop request check failed.");
+        }
+
+        var lightStrip = new LightStripSnapshot
+        {
+            Mode = "static_multi",
+            Speed = "fast",
+            Brightness = 72,
+            Colors =
+            [
+                new LightRgbSnapshot { R = 255, G = 0, B = 128 },
+                new LightRgbSnapshot { R = 0, G = 255, B = 255 },
+                new LightRgbSnapshot { R = 128, G = 0, B = 255 },
+            ],
+        };
+        using var lightStripRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("SetLightStrip", new { config = lightStrip }, "self-check-light-strip"));
+        var lightStripData = lightStripRequest.RootElement.GetProperty("data");
+        var decodedLightStrip = lightStripData.GetProperty("config").Deserialize<LightStripSnapshot>(ThrmIpcClient.JsonOptions);
+        if (lightStripRequest.RootElement.GetProperty("type").GetString() != "SetLightStrip"
+            || decodedLightStrip is not { Mode: "static_multi", Speed: "fast", Brightness: 72 }
+            || decodedLightStrip.Colors.Count != 3
+            || decodedLightStrip.Colors[0].R != 255
+            || decodedLightStrip.Colors[1].G != 255
+            || decodedLightStrip.Colors[2].B != 255)
+        {
+            throw new InvalidOperationException("SetLightStrip request/decoding check failed.");
+        }
+
+        using var checkWindowsAutoStartRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("CheckWindowsAutoStart", null, "self-check-check-autostart"));
+        using var getAutoStartMethodRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("GetAutoStartMethod", null, "self-check-get-autostart-method"));
+        using var isRunningAsAdminRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("IsRunningAsAdmin", null, "self-check-is-admin"));
+        var setAutoStartWithMethodPayload = new { enable = true, method = "registry" };
+        using var setAutoStartWithMethodRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine(
+                "SetAutoStartWithMethod",
+                setAutoStartWithMethodPayload,
+                "self-check-set-autostart-method"));
+        var setAutoStartWithMethodData = setAutoStartWithMethodRequest.RootElement.GetProperty("data");
+        if (checkWindowsAutoStartRequest.RootElement.GetProperty("type").GetString() != "CheckWindowsAutoStart"
+            || getAutoStartMethodRequest.RootElement.GetProperty("type").GetString() != "GetAutoStartMethod"
+            || isRunningAsAdminRequest.RootElement.GetProperty("type").GetString() != "IsRunningAsAdmin"
+            || setAutoStartWithMethodRequest.RootElement.GetProperty("type").GetString() != "SetAutoStartWithMethod"
+            || setAutoStartWithMethodData.ValueKind != JsonValueKind.Object
+            || setAutoStartWithMethodData.EnumerateObject().Count() != 2
+            || setAutoStartWithMethodData.GetProperty("enable").ValueKind != JsonValueKind.True
+            || setAutoStartWithMethodData.GetProperty("method").GetString() != "registry")
+        {
+            throw new InvalidOperationException("Auto-start request envelope check failed.");
         }
 
         using var saveProfileRequest = JsonDocument.Parse(
@@ -909,17 +1024,20 @@ internal static class IpcProtocolSelfCheck
                 },
             ],
         };
-        using var timeCurveScheduleRequest = JsonDocument.Parse(
-            ThrmIpcClient.BuildRequestLine("SetTimeCurveSchedule", schedule, "self-check-time-curve-schedule"));
-        var timeCurveScheduleData = timeCurveScheduleRequest.RootElement.GetProperty("data");
-        var decodedSchedule = timeCurveScheduleData.Deserialize<TimeCurveScheduleSnapshot>(ThrmIpcClient.JsonOptions);
-        if (timeCurveScheduleRequest.RootElement.GetProperty("type").GetString() != "SetTimeCurveSchedule"
-            || decodedSchedule is not { Enabled: true }
-            || decodedSchedule.Rules.Count != 1
-            || decodedSchedule.Rules[0].StartTime != "22:00"
-            || !decodedSchedule.Rules[0].Weekdays.SequenceEqual(new[] { 1, 2, 3, 4, 5 }))
+        using var originalConfig = JsonDocument.Parse(
+            "{\"futureField\":{\"keep\":true},\"timeCurveSchedule\":{\"enabled\":false,\"rules\":[]}}" );
+        var patchedConfig = TimeCurveScheduleConfigJson.ReplaceTimeCurveSchedule(
+            originalConfig.RootElement,
+            schedule);
+        using var updateConfigRequest = JsonDocument.Parse(
+            ThrmIpcClient.BuildRequestLine("UpdateConfig", patchedConfig, "self-check-time-curve-update"));
+        var updateConfigData = updateConfigRequest.RootElement.GetProperty("data");
+        if (updateConfigRequest.RootElement.GetProperty("type").GetString() != "UpdateConfig"
+            || updateConfigData.GetProperty("futureField").GetProperty("keep").ValueKind != JsonValueKind.True
+            || updateConfigData.GetProperty("timeCurveSchedule").GetProperty("enabled").ValueKind != JsonValueKind.True
+            || updateConfigData.GetProperty("timeCurveSchedule").GetProperty("rules").GetArrayLength() != 1)
         {
-            throw new InvalidOperationException("SetTimeCurveSchedule request/decoding check failed.");
+            throw new InvalidOperationException("Time curve schedule config patch check failed.");
         }
 
         var response = JsonSerializer.Deserialize<IpcMessage>(

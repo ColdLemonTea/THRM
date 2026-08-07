@@ -64,7 +64,6 @@ const (
 	ReqGetFanCurve              RequestType = "GetFanCurve"
 	ReqGetFanCurveProfiles      RequestType = "GetFanCurveProfiles"
 	ReqSetActiveFanCurveProfile RequestType = "SetActiveFanCurveProfile"
-	ReqSetTimeCurveSchedule     RequestType = "SetTimeCurveSchedule"
 	ReqSaveFanCurveProfile      RequestType = "SaveFanCurveProfile"
 	ReqDeleteFanCurveProfile    RequestType = "DeleteFanCurveProfile"
 	ReqExportFanCurveProfiles   RequestType = "ExportFanCurveProfiles"

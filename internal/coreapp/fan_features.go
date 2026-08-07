@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TIANLI0/THRM/internal/ipc"
 	"github.com/TIANLI0/THRM/internal/types"
 )
 
@@ -33,39 +32,6 @@ func normalizeFanFeatureConfig(cfg *types.AppConfig) bool {
 	}
 
 	return changed
-}
-
-// SetTimeCurveSchedule 更新分时曲线计划；只读当前 Core 配置中的曲线方案做归一化，避免局部模型覆盖其它配置。
-func (a *CoreApp) SetTimeCurveSchedule(schedule types.TimeCurveScheduleConfig) error {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
-
-	cfg := a.configManager.Get()
-	normalized := types.NormalizeTimeCurveScheduleConfig(
-		schedule,
-		cfg.FanCurveProfiles,
-		cfg.ActiveFanCurveProfileID,
-	)
-	if cfg.TimeCurveSchedule.Enabled == normalized.Enabled && slices.EqualFunc(
-		cfg.TimeCurveSchedule.Rules,
-		normalized.Rules,
-		func(left, right types.TimeCurveScheduleRule) bool {
-			return left.ID == right.ID && left.Name == right.Name && left.Enabled == right.Enabled &&
-				slices.Equal(left.Weekdays, right.Weekdays) && left.StartTime == right.StartTime &&
-				left.EndTime == right.EndTime && left.CurveProfileID == right.CurveProfileID
-		},
-	) {
-		return nil
-	}
-
-	cfg.TimeCurveSchedule = normalized
-	if err := a.configManager.Update(cfg); err != nil {
-		return err
-	}
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
-	return nil
 }
 
 func applySpeedAvoidance(targetRPM, minAllowedRPM, maxAllowedRPM, prevTargetRPM, controlTemp, prevControlTemp int, cfg types.SpeedAvoidanceConfig) (int, bool) {
