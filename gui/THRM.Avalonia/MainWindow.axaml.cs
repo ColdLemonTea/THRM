@@ -598,6 +598,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        RtssNavigationItem.IsVisible = OperatingSystem.IsWindows();
         foreach (var comboBox in new[]
                  {
                      FanCurveProfileComboBox,

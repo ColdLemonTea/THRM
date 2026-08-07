@@ -177,7 +177,7 @@
             <icons:FluentIconSource Icon="Bug" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
-        <ui:FANavigationViewItem Content="RTSS overlay" Tag="rtss-overlay">
+        <ui:FANavigationViewItem x:Name="RtssNavigationItem" Content="RTSS overlay" Tag="rtss-overlay">
           <ui:FANavigationViewItem.IconSource>
             <icons:FluentIconSource Icon="Gauge" />
           </ui:FANavigationViewItem.IconSource>
