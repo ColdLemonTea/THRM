@@ -625,7 +625,8 @@ public partial class MainWindow : Window
         {
             AttachComboBoxOpeningAnimation(comboBox);
         }
-        using (var iconStream = AssetLoader.Open(new Uri("avares://THRM.Avalonia/Assets/thrm.png")))
+        var assemblyName = typeof(MainWindow).Assembly.GetName().Name!;
+        using (var iconStream = AssetLoader.Open(new Uri($"avares://{assemblyName}/Assets/thrm.png")))
         {
             Icon = new WindowIcon(new Bitmap(iconStream));
         }
