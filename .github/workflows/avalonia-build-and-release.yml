@@ -288,7 +288,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config \
-            libhidapi-dev libudev-dev
+            libhidapi-dev libudev-dev libx11-dev
 
       - name: Build Avalonia UI and Core (Linux)
         shell: bash
@@ -858,4 +858,3 @@ jobs:
           files: |
             dist/windows/*
             dist/linux/*
-
