@@ -112,6 +112,19 @@
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
+    <Style Selector=".compact-settings-picker"
+           x:SetterTargetType="Button">
+      <Setter Property="Width" Value="220" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+
+    <Style Selector="ui|FASettingsExpanderItem.last-visible-setting /template/ Border#Root">
+      <Setter Property="CornerRadius"
+              Value="{Binding Source={StaticResource ControlCornerRadius}, Converter={StaticResource BottomCornerRadiusFilterConverter}}" />
+    </Style>
+
     <Style Selector="ScrollViewer.page-scroll">
       <Setter Property="IsScrollChainingEnabled" Value="True" />
       <Setter Property="IsScrollInertiaEnabled" Value="True" />
@@ -157,6 +170,16 @@
         <ui:FANavigationViewItem Content="System settings" Tag="system">
           <ui:FANavigationViewItem.IconSource>
             <icons:FluentIconSource Icon="Settings" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="Diagnostics" Tag="diagnostics">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="Bug" />
+          </ui:FANavigationViewItem.IconSource>
+        </ui:FANavigationViewItem>
+        <ui:FANavigationViewItem Content="RTSS overlay" Tag="rtss-overlay">
+          <ui:FANavigationViewItem.IconSource>
+            <icons:FluentIconSource Icon="Gauge" />
           </ui:FANavigationViewItem.IconSource>
         </ui:FANavigationViewItem>
       </ui:FANavigationView.MenuItems>
@@ -365,8 +388,8 @@
                               Content="Manage"
                               IsEnabled="False">
                         <Button.Flyout>
-                          <ui:FAMenuFlyout Opening="FanCurveProfileManageFlyoutOpening"
-                                           Opened="FanCurveProfileManageFlyoutOpened">
+                          <ui:FAMenuFlyout Opening="MenuFlyoutOpening"
+                                           Opened="MenuFlyoutOpened">
                             <ui:FAMenuFlyoutItem x:Name="FanCurveNewProfileMenuItem"
                                                   Text="New profile"
                                                   Click="NewFanCurveProfileClick"
@@ -459,12 +482,155 @@
               </ui:FASettingsExpander>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Speed avoidance"
+                                     Description="Avoid a fan-speed range that causes audible resonance."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Gauge" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpander.Footer>
+                  <ToggleSwitch x:Name="SpeedAvoidanceEnabledSwitch"
+                                AutomationProperties.Name="Enable speed avoidance"
+                                VerticalAlignment="Center"
+                                IsEnabled="False"
+                                Click="SpeedAvoidanceEnabledClick" />
+                </ui:FASettingsExpander.Footer>
+                <ui:FASettingsExpanderItem Content="Minimum speed"
+                                           Description="Set the lower edge of the avoided speed range.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                      <ui:FANumberBox x:Name="SpeedAvoidanceMinRpmNumberBox"
+                                       Width="112"
+                                       Minimum="800"
+                                       Maximum="4500"
+                                       SmallChange="50"
+                                       SpinButtonPlacementMode="Compact"
+                                       IsEnabled="False"
+                                       Value="1900"
+                                       ValueChanged="SpeedAvoidanceValueChanged" />
+                      <TextBlock Text="RPM" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Maximum speed"
+                                           Description="Set the upper edge of the avoided speed range.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                      <ui:FANumberBox x:Name="SpeedAvoidanceMaxRpmNumberBox"
+                                       Width="112"
+                                       Minimum="800"
+                                       Maximum="4500"
+                                       SmallChange="50"
+                                       SpinButtonPlacementMode="Compact"
+                                       IsEnabled="False"
+                                       Value="2200"
+                                       ValueChanged="SpeedAvoidanceValueChanged" />
+                      <TextBlock Text="RPM" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Safety margin"
+                                           Description="Keep this distance from the resonant range when changing speed.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                      <ui:FANumberBox x:Name="SpeedAvoidanceMarginRpmNumberBox"
+                                       Width="112"
+                                       Minimum="50"
+                                       Maximum="500"
+                                       SmallChange="50"
+                                       SpinButtonPlacementMode="Compact"
+                                       IsEnabled="False"
+                                       Value="100"
+                                       ValueChanged="SpeedAvoidanceValueChanged" />
+                      <TextBlock Text="RPM" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Emergency bypass temperature"
+                                           Description="Allow the fan to use the avoided range above this temperature.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                      <ui:FANumberBox x:Name="SpeedAvoidanceBypassTempNumberBox"
+                                       Width="112"
+                                       Minimum="60"
+                                       Maximum="95"
+                                       SmallChange="1"
+                                       SpinButtonPlacementMode="Compact"
+                                       IsEnabled="False"
+                                       Value="80"
+                                       ValueChanged="SpeedAvoidanceValueChanged" />
+                      <TextBlock Text="°C" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Curve learning"
                                      Description="Manage the adaptive speed offsets learned by THRM Core."
                                      IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="BrainCircuit" />
                 </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpander.Footer>
+                  <ToggleSwitch x:Name="FanCurveLearningEnabledSwitch"
+                                AutomationProperties.Name="Enable curve learning"
+                                VerticalAlignment="Center"
+                                IsEnabled="False"
+                                Click="FanCurveLearningEnabledClick" />
+                </ui:FASettingsExpander.Footer>
+                <ui:FASettingsExpanderItem Content="Learning bias"
+                                           Description="Choose whether learned corrections favor balanced control, cooling, or quieter operation.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="FanCurveLearningBiasComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="FanCurveLearningBiasSelectionChanged">
+                      <ui:FAComboBoxItem Content="Balanced" />
+                      <ui:FAComboBoxItem Content="Favor cooling" />
+                      <ui:FAComboBoxItem Content="Favor quiet" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Predictive boost"
+                                           Description="Let THRM raise fan speed early when the temperature trend is rising.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="FanCurvePredictiveBoostSwitch"
+                                  IsEnabled="False"
+                                  Click="FanCurvePredictiveBoostClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="FanCurveLaptopFanGuardSetting"
+                                           Content="Laptop fan guard"
+                                           Description="Slow ramp-down while a detected laptop fan is still spinning."
+                                           IsVisible="False">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="FanCurveLaptopFanGuardSwitch"
+                                  IsEnabled="False"
+                                  Click="FanCurveLaptopFanGuardClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Target temperature"
+                                           Description="Set the temperature curve learning aims to hold.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                      <ui:FANumberBox x:Name="FanCurveTargetTempNumberBox"
+                                       Width="112"
+                                       Minimum="45"
+                                       Maximum="90"
+                                       SmallChange="1"
+                                       SpinButtonPlacementMode="Compact"
+                                       Value="68"
+                                       IsEnabled="False" />
+                      <TextBlock Text="°C" VerticalAlignment="Center" />
+                      <Button x:Name="ApplyFanCurveTargetTempButton"
+                              Classes="accent"
+                              Content="Apply"
+                              IsEnabled="False"
+                              Click="ApplyFanCurveTargetTempClick" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Largest active corrections">
                   <ui:FASettingsExpanderItem.Resources>
                     <x:Double x:Key="SettingsExpanderItemAdaptiveWidthTrigger">10000</x:Double>
@@ -509,14 +675,13 @@
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="History" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Content="Background recording"
-                                           Description="Keep samples in the Core-managed history file.">
-                  <ui:FASettingsExpanderItem.Footer>
-                    <ToggleSwitch x:Name="TemperatureHistoryEnabledSwitch"
-                                  IsEnabled="False"
-                                  Click="TemperatureHistoryEnabledClick" />
-                  </ui:FASettingsExpanderItem.Footer>
-                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpander.Footer>
+                  <ToggleSwitch x:Name="TemperatureHistoryEnabledSwitch"
+                                AutomationProperties.Name="Enable background recording"
+                                VerticalAlignment="Center"
+                                IsEnabled="False"
+                                Click="TemperatureHistoryEnabledClick" />
+                </ui:FASettingsExpander.Footer>
                 <ui:FASettingsExpanderItem Content="Retention"
                                            Description="Choose how long THRM Core retains recorded samples.">
                   <ui:FASettingsExpanderItem.Footer>
@@ -648,50 +813,84 @@
               </ui:FASettingsExpander>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
-                                     Header="Custom fan speed"
-                                     Description="Hold the connected device at a specific target speed."
+                                     Header="Temperature control"
+                                     Description="Choose which temperature readings drive automatic fan control."
                                      IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
-                  <icons:FluentIconSource Icon="Gauge" />
+                  <icons:FluentIconSource Icon="Temperature" />
                 </ui:FASettingsExpander.IconSource>
-                <ui:FASettingsExpanderItem Content="Enable custom speed"
-                                           Description="Custom speed overrides automatic control and manual presets.">
+                <ui:FASettingsExpanderItem Content="Control temperature source"
+                                           Description="Select the temperature source THRM uses for automatic fan control.">
                   <ui:FASettingsExpanderItem.Footer>
-                    <ToggleSwitch x:Name="CustomSpeedSwitch"
-                                  IsEnabled="False"
-                                  Click="CustomSpeedClick" />
+                    <ui:FAComboBox x:Name="TempSourceComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="TempSourceSelectionChanged">
+                      <ui:FAComboBoxItem Content="Highest temperature" />
+                      <ui:FAComboBoxItem Content="CPU only" />
+                      <ui:FAComboBoxItem Content="GPU only" />
+                    </ui:FAComboBox>
                   </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Content="Target speed"
-                                           Description="Choose a value from 1,000 to 4,000 RPM, then apply it.">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <ui:FANumberBox x:Name="CustomSpeedNumberBox"
-                                    Value="2000"
-                                    Minimum="1000"
-                                    Maximum="4000"
-                                    SmallChange="50"
-                                    SpinButtonPlacementMode="Compact"
-                                    IsEnabled="False" />
-                    <Button x:Name="ApplyCustomSpeedButton"
-                            Grid.Column="1"
-                            Classes="accent"
-                            Content="Apply"
-                            Click="ApplyCustomSpeedClick"
-                            IsEnabled="False" />
-                  </Grid>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Current availability.">
-                  <TextBlock x:Name="CustomSpeedStatusText"
-                             Text="Custom speed is waiting for synchronized Core state."
-                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap" />
+                <ui:FASettingsExpanderItem Content="Temperature smoothing"
+                                           Description="Average recent readings while automatic control is enabled.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="TempSampleCountComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="TempSampleCountSelectionChanged">
+                      <ui:FAComboBoxItem Content="1 · Instant response" />
+                      <ui:FAComboBoxItem Content="2 · Light smoothing" />
+                      <ui:FAComboBoxItem Content="3 · Default" />
+                      <ui:FAComboBoxItem Content="5 · Stronger smoothing" />
+                      <ui:FAComboBoxItem Content="10 · Heavy smoothing" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
-                                     Header="Manual fan control"
-                                     Description="Select a Core preset and apply it to the connected device."
-                                     IsExpanded="False">
+                                      Header="Custom fan speed"
+                                      Description="Hold the connected device at a specific target speed."
+                                      IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Gauge" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpander.Footer>
+                  <ToggleSwitch x:Name="CustomSpeedSwitch"
+                                AutomationProperties.Name="Enable custom speed"
+                                VerticalAlignment="Center"
+                                IsEnabled="False"
+                                Click="CustomSpeedClick" />
+                </ui:FASettingsExpander.Footer>
+                <ui:FASettingsExpanderItem Content="Target speed"
+                                           Description="Choose a value from 1,000 to 4,000 RPM.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <ui:FANumberBox x:Name="CustomSpeedNumberBox"
+                                     Width="112"
+                                     Value="2000"
+                                     Minimum="1000"
+                                     Maximum="4000"
+                                     SmallChange="50"
+                                     SpinButtonPlacementMode="Compact"
+                                     IsEnabled="False" />
+                    <TextBlock Text="RPM" VerticalAlignment="Center" />
+                    <Button x:Name="ApplyCustomSpeedButton"
+                            Classes="accent"
+                            Content="Apply"
+                            Click="ApplyCustomSpeedClick"
+                            IsEnabled="False" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander x:Name="ManualFanControlExpander"
+                                      Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                      Header="Manual gear"
+                                      Description="Choose a manual gear and target speed."
+                                      IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="Temperature" />
                 </ui:FASettingsExpander.IconSource>
@@ -725,30 +924,33 @@
                     </ui:FAComboBox>
                   </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Send the selected values to Core.">
+                <ui:FASettingsExpanderItem x:Name="ManualGearRpmSetting"
+                                           Content="Target speed"
+                                           Description="Adjust the selected preset before applying it.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                      <ui:FANumberBox x:Name="ManualGearRpmNumberBox"
+                                       Width="112"
+                                       Minimum="800"
+                                       Maximum="4500"
+                                       SmallChange="50"
+                                       SpinButtonPlacementMode="Compact"
+                                       IsEnabled="False"
+                                       Value="2400" />
+                      <TextBlock Text="RPM" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Apply preset"
+                                           Description="Set the selected manual gear on the connected device.">
                   <Button x:Name="ApplyManualGearButton"
                           Content="Apply"
                           HorizontalAlignment="Right"
                           Click="ApplyManualGearClick"
                           IsEnabled="False" />
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Current selection and availability.">
-                  <StackPanel Spacing="4">
-                    <TextBlock x:Name="ManualAppliedText"
-                               Text="Applied preset: —"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                    <TextBlock x:Name="ManualControlAvailabilityText"
-                               Text="Manual control is waiting for synchronized Core state."
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               TextWrapping="Wrap" />
-                    <TextBlock x:Name="ManualLevelInfo"
-                               Text="BS1 uses fixed presets; level not applicable."
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               TextWrapping="Wrap"
-                               IsVisible="False" />
-                  </StackPanel>
-                </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
+
             </StackPanel>
           </ScrollViewer>
 
@@ -825,21 +1027,24 @@
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Brightness"
                                            Description="Set the light-strip brightness.">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                    <Slider x:Name="LightBrightnessSlider"
-                            Minimum="0"
-                            Maximum="100"
-                            TickFrequency="1"
-                            IsSnapToTickEnabled="True"
-                            IsEnabled="False"
-                            ValueChanged="LightBrightnessValueChanged" />
-                    <TextBlock x:Name="LightBrightnessValueText"
-                               Grid.Column="1"
-                               Width="48"
-                               Text="100%"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Center" />
-                  </Grid>
+                  <ui:FASettingsExpanderItem.Resources>
+                    <x:Double x:Key="SettingsExpanderItemAdaptiveWidthTrigger">720</x:Double>
+                  </ui:FASettingsExpanderItem.Resources>
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid Width="300" ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                      <TextBlock x:Name="LightBrightnessValueText"
+                                 Text="100"
+                                 VerticalAlignment="Center" />
+                      <Slider x:Name="LightBrightnessSlider"
+                              Grid.Column="1"
+                              Minimum="0"
+                              Maximum="100"
+                              TickFrequency="1"
+                              IsSnapToTickEnabled="True"
+                              IsEnabled="False"
+                              ValueChanged="LightBrightnessValueChanged" />
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem x:Name="LightSmartTemperatureDeviceSetting"
                                            Description="Smart temperature owns the colors and brightness automatically.">
@@ -850,10 +1055,10 @@
                                 Title="Smart temperature"
                                 Message="Core owns the colors and brightness while this mode is active." />
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem x:Name="LightColorsDeviceSetting"
-                                           Content="Colors"
-                                           Description="Choose a preset or edit each required color.">
-                  <StackPanel Spacing="10">
+                <ui:FASettingsExpanderItem x:Name="LightColorPresetSetting"
+                                           Content="Theme preset"
+                                           Description="Select a predefined color palette.">
+                  <ui:FASettingsExpanderItem.Footer>
                     <WrapPanel x:Name="LightColorPresetPanel"
                                ItemSpacing="8"
                                LineSpacing="8"
@@ -871,39 +1076,60 @@
                               Click="LightPresetClick"
                               AutomationProperties.Name="Apply Glacier lighting preset" />
                     </WrapPanel>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LightColorsDeviceSetting"
+                                           Content="Custom colors"
+                                           Description="Edit individual color slots.">
+                  <ui:FASettingsExpanderItem.Resources>
+                    <x:Double x:Key="SettingsExpanderItemAdaptiveWidthTrigger">800</x:Double>
+                  </ui:FASettingsExpanderItem.Resources>
+                  <ui:FASettingsExpanderItem.Footer>
                     <WrapPanel ItemSpacing="12" LineSpacing="10">
-                      <StackPanel x:Name="LightColorSlot0" Width="176" Spacing="4">
-                        <TextBlock Text="Color 1" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <StackPanel x:Name="LightColorSlot0"
+                                  Orientation="Horizontal"
+                                  Spacing="8"
+                                  VerticalAlignment="Center">
+                        <TextBlock Text="Color 1" VerticalAlignment="Center" />
                         <ColorPicker x:Name="LightColorPicker0"
                                      Color="#FFFF0000"
                                      IsAlphaEnabled="False"
                                      IsEnabled="False"
-                                     HorizontalAlignment="Stretch"
+                                     Width="88"
+                                     VerticalAlignment="Center"
                                      AutomationProperties.Name="Lighting color 1"
                                      ColorChanged="LightColorChanged" />
                       </StackPanel>
-                      <StackPanel x:Name="LightColorSlot1" Width="176" Spacing="4">
-                        <TextBlock Text="Color 2" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <StackPanel x:Name="LightColorSlot1"
+                                  Orientation="Horizontal"
+                                  Spacing="8"
+                                  VerticalAlignment="Center">
+                        <TextBlock Text="Color 2" VerticalAlignment="Center" />
                         <ColorPicker x:Name="LightColorPicker1"
                                      Color="#FF00FF00"
                                      IsAlphaEnabled="False"
                                      IsEnabled="False"
-                                     HorizontalAlignment="Stretch"
+                                     Width="88"
+                                     VerticalAlignment="Center"
                                      AutomationProperties.Name="Lighting color 2"
                                      ColorChanged="LightColorChanged" />
                       </StackPanel>
-                      <StackPanel x:Name="LightColorSlot2" Width="176" Spacing="4">
-                        <TextBlock Text="Color 3" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                      <StackPanel x:Name="LightColorSlot2"
+                                  Orientation="Horizontal"
+                                  Spacing="8"
+                                  VerticalAlignment="Center">
+                        <TextBlock Text="Color 3" VerticalAlignment="Center" />
                         <ColorPicker x:Name="LightColorPicker2"
                                      Color="#FF0080FF"
                                      IsAlphaEnabled="False"
                                      IsEnabled="False"
-                                     HorizontalAlignment="Stretch"
+                                     Width="88"
+                                     VerticalAlignment="Center"
                                      AutomationProperties.Name="Lighting color 3"
                                      ColorChanged="LightColorChanged" />
                       </StackPanel>
                     </WrapPanel>
-                  </StackPanel>
+                  </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem Content="Apply lighting"
                                            Description="Changes remain local until you explicitly apply them to THRM Core.">
@@ -942,24 +1168,18 @@
                   </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
                 <ui:FASettingsExpanderItem x:Name="SmartStartStopDeviceSetting"
-                                           Content="Smart start and stop"
-                                           Description="Choose when supported devices react to temperature changes.">
+                                           Content="Smart start/stop"
+                                           Description="Choose when cooling stops after the system shuts down.">
                   <ui:FASettingsExpanderItem.Footer>
                     <ui:FAComboBox x:Name="SmartStartStopComboBox"
                                    Classes="compact-settings-combo"
                                    IsEnabled="False"
                                    SelectionChanged="SmartStartStopSelectionChanged">
                       <ui:FAComboBoxItem Content="Off" />
-                      <ui:FAComboBoxItem Content="Start immediately" />
-                      <ui:FAComboBoxItem Content="Start after delay" />
+                      <ui:FAComboBoxItem Content="Immediate" />
+                      <ui:FAComboBoxItem Content="Delayed" />
                     </ui:FAComboBox>
                   </ui:FASettingsExpanderItem.Footer>
-                </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Current availability.">
-                  <TextBlock x:Name="DeviceFeaturesStatusText"
-                             Text="Device features are waiting for synchronized Core state."
-                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
@@ -978,9 +1198,85 @@
               </StackPanel>
 
               <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Appearance"
+                                     Description="Choose the color mode used by the Avalonia client."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Lightbulb" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="App theme"
+                                           Description="System follows your operating-system preference.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="ThemeModeComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="ThemeModeSelectionChanged">
+                      <ui:FAComboBoxItem Content="System" />
+                      <ui:FAComboBoxItem Content="Light" />
+                      <ui:FAComboBoxItem Content="Dark" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Keyboard shortcuts"
+                                     Description="Set global shortcuts with Ctrl/Alt/Shift/Win + A-Z, 0-9, or F1-F12."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Settings" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Toggle manual gear"
+                                           Description="Focus the field and press a supported shortcut. Delete or Backspace clears it; Escape cancels.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <TextBox x:Name="ManualGearHotkeyTextBox"
+                             Tag="manual"
+                             Width="220"
+                             IsReadOnly="True"
+                             IsEnabled="False"
+                             PlaceholderText="Press a shortcut"
+                             HorizontalContentAlignment="Center"
+                             AutomationProperties.Name="Toggle manual gear shortcut"
+                             KeyDown="HotkeyTextBoxKeyDown"
+                             LostFocus="HotkeyTextBoxLostFocus" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Toggle automatic control"
+                                           Description="Use Ctrl/Alt/Shift/Win with A-Z, 0-9, or F1-F12.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <TextBox x:Name="AutoControlHotkeyTextBox"
+                             Tag="auto"
+                             Width="220"
+                             IsReadOnly="True"
+                             IsEnabled="False"
+                             PlaceholderText="Press a shortcut"
+                             HorizontalContentAlignment="Center"
+                             AutomationProperties.Name="Toggle automatic control shortcut"
+                             KeyDown="HotkeyTextBoxKeyDown"
+                             LostFocus="HotkeyTextBoxLostFocus" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Toggle curve profile"
+                                           Description="Use Ctrl/Alt/Shift/Win with A-Z, 0-9, or F1-F12.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <TextBox x:Name="CurveProfileHotkeyTextBox"
+                             Tag="curve"
+                             Width="220"
+                             IsReadOnly="True"
+                             IsEnabled="False"
+                             PlaceholderText="Press a shortcut"
+                             HorizontalContentAlignment="Center"
+                             AutomationProperties.Name="Toggle curve profile shortcut"
+                             KeyDown="HotkeyTextBoxKeyDown"
+                             LostFocus="HotkeyTextBoxLostFocus" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
                                      Header="Startup"
                                      Description="Start THRM automatically when you sign in."
-                                     IsExpanded="True">
+                                     IsExpanded="False">
                 <ui:FASettingsExpander.IconSource>
                   <icons:FluentIconSource Icon="Settings" />
                 </ui:FASettingsExpander.IconSource>
@@ -993,7 +1289,7 @@
                                   Click="SystemAutoStartClick" />
                   </ui:FASettingsExpanderItem.Footer>
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Current startup state and method.">
+                <ui:FASettingsExpanderItem>
                   <StackPanel Spacing="4">
                     <TextBlock x:Name="SystemAutoStartStateText"
                                Text="Waiting for THRM Core."
@@ -1012,6 +1308,535 @@
                                 Severity="Warning"
                                 Title="Startup unavailable"
                                 Message="Waiting for THRM Core." />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Device reconnection"
+                                     Description="Choose how THRM treats the device after a temporary disconnect."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="PlugConnected" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Keep app configuration after reconnect"
+                                           Description="Prevents a reconnect from falling back to the device default mode.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="IgnoreDeviceOnReconnectSwitch"
+                                  IsEnabled="False"
+                                  Click="IgnoreDeviceOnReconnectClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Monitoring sources"
+                                     Description="Choose the hardware temperature sources THRM uses for monitoring and fan control."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Temperature" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="CPU temperature sensors"
+                                           Description="Select one or more sensors to average. Leaving every sensor unselected uses THRM's automatic choice.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Button x:Name="CpuSensorSelectionButton"
+                            Classes="compact-settings-picker"
+                            IsEnabled="False"
+                            AutomationProperties.Name="Choose CPU temperature sensors">
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBlock x:Name="CpuSensorSelectionText"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   Text="Automatic (recommended)" />
+                        <ui:FAIconSourceElement Grid.Column="1"
+                                                Width="16"
+                                                Height="16"
+                                                VerticalAlignment="Center">
+                          <ui:FAIconSourceElement.IconSource>
+                            <icons:FluentIconSource Icon="ChevronDown" />
+                          </ui:FAIconSourceElement.IconSource>
+                        </ui:FAIconSourceElement>
+                      </Grid>
+                      <Button.Flyout>
+                        <ui:FAMenuFlyout Opening="CpuSensorMenuFlyoutOpening"
+                                         Opened="MenuFlyoutOpened"
+                                         Closed="CpuSensorMenuFlyoutClosed" />
+                      </Button.Flyout>
+                    </Button>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Monitor GPU temperatures"
+                                           Description="Turn this off on hybrid systems to avoid waking a discrete GPU.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="GpuMonitoringSwitch"
+                                  IsEnabled="False"
+                                  Click="GpuMonitoringClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="GPU device"
+                                           Description="Choose which detected GPU THRM monitors.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="GpuDeviceComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="GpuDeviceSelectionChanged" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="GPU temperature sensor"
+                                           Description="Choose a sensor for the selected GPU or keep THRM's automatic choice.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="GpuSensorComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="GpuSensorSelectionChanged" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+            </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="RtssOverlayPage"
+                        Classes="page-scroll"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="RTSS overlay" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Publish THRM fan speed to RivaTuner Statistics Server while games are running."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander x:Name="RtssOutputExpander"
+                                     Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Output"
+                                     Description="Configure when THRM writes the overlay value."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Gauge" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Enable RTSS overlay"
+                                           Description="Publish the current fan speed to the active RTSS overlay.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="RtssEnabledSwitch"
+                                  IsEnabled="False"
+                                  Click="RtssEnabledClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Update interval"
+                                           Description="Choose how often THRM refreshes the overlay value.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="RtssIntervalComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="RtssIntervalSelectionChanged">
+                      <ui:FAComboBoxItem Content="250 ms" />
+                      <ui:FAComboBoxItem Content="500 ms" />
+                      <ui:FAComboBoxItem Content="1 second" />
+                      <ui:FAComboBoxItem Content="2 seconds" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="RtssUnavailableSetting"
+                                           Padding="0"
+                                           MinHeight="0"
+                                           Background="Transparent"
+                                           HorizontalContentAlignment="Stretch"
+                                           IsVisible="False">
+                  <ui:FASettingsExpanderItem.Resources>
+                    <Thickness x:Key="SettingsExpanderItemContentMargin">0</Thickness>
+                  </ui:FASettingsExpanderItem.Resources>
+                  <ui:FAInfoBar x:Name="RtssUnavailableInfoBar"
+                                HorizontalAlignment="Stretch"
+                                IsOpen="False"
+                                IsClosable="False"
+                                Severity="Warning"
+                                Title="RTSS overlay unavailable"
+                                Message="This THRM Core version does not expose RTSS configuration." />
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander x:Name="RtssPositionExpander"
+                                     Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Position"
+                                     Description="Choose how RTSS positions the THRM value in its overlay."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Settings" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Position mode"
+                                           Description="Use RTSS OverlayEditor positioning or provide a custom offset.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ui:FAComboBox x:Name="RtssPositionModeComboBox"
+                                   Classes="compact-settings-combo"
+                                   IsEnabled="False"
+                                   SelectionChanged="RtssPositionModeSelectionChanged">
+                      <ui:FAComboBoxItem Content="RTSS OverlayEditor" />
+                      <ui:FAComboBoxItem Content="Custom offset" />
+                    </ui:FAComboBox>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="RtssAnchorPositionSetting">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="RTSS OverlayEditor" FontWeight="SemiBold" />
+                    <TextBlock Text="THRM follows the anchor at the bottom of the active OverlayEditor layout."
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="RtssAnchorStatusText"
+                               Text="Checking the active RTSS layout..."
+                               TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <Button x:Name="RefreshRtssAnchorButton"
+                              Content="Refresh"
+                              IsEnabled="False"
+                              Click="RefreshRtssAnchorClick" />
+                      <Button x:Name="CreateRtssAnchorButton"
+                              Classes="accent"
+                              Content="Set up anchor"
+                              IsEnabled="False"
+                              Click="CreateRtssAnchorClick" />
+                    </StackPanel>
+                  </StackPanel>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="RtssCustomPositionSetting"
+                                           IsVisible="False">
+                  <ui:FASettingsExpanderItem.Content>
+                    <StackPanel Spacing="8">
+                      <TextBlock Text="Custom offset" FontWeight="SemiBold" />
+                      <TextBlock Text="Preview the offset without saving it, then apply it when it is in the right position."
+                                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap" />
+                      <Grid ColumnDefinitions="Auto,112,Auto,112,Auto,Auto"
+                            ColumnSpacing="8"
+                            RowDefinitions="Auto,Auto"
+                            RowSpacing="8">
+                        <TextBlock Text="X" VerticalAlignment="Center" />
+                        <ui:FANumberBox x:Name="RtssPositionXNumberBox"
+                                        Grid.Column="1"
+                                        Minimum="-1000"
+                                        Maximum="1000"
+                                        SmallChange="1"
+                                        SpinButtonPlacementMode="Compact"
+                                        IsEnabled="False" />
+                        <TextBlock Grid.Column="2" Text="Y" VerticalAlignment="Center" />
+                        <ui:FANumberBox x:Name="RtssPositionYNumberBox"
+                                        Grid.Column="3"
+                                        Minimum="-1000"
+                                        Maximum="1000"
+                                        SmallChange="1"
+                                        SpinButtonPlacementMode="Compact"
+                                        IsEnabled="False" />
+                        <Button x:Name="RtssPreviewPositionButton"
+                                Grid.Column="4"
+                                Content="Preview"
+                                IsEnabled="False"
+                                Click="RtssPreviewPositionClick" />
+                        <Button x:Name="RtssApplyPositionButton"
+                                Grid.Column="5"
+                                Classes="accent"
+                                Content="Apply"
+                                IsEnabled="False"
+                                Click="RtssApplyPositionClick" />
+                        <TextBlock x:Name="RtssPositionStatusText"
+                                   Grid.Row="1"
+                                   Grid.ColumnSpan="6"
+                                   Text="Choose a custom offset to preview or apply it."
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                      </Grid>
+                    </StackPanel>
+                  </ui:FASettingsExpanderItem.Content>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander x:Name="LegionFnQExpander"
+                                     Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Lenovo Legion Fn+Q"
+                                     Description="Map Lenovo power modes to THRM manual fan presets."
+                                     IsExpanded="False"
+                                     IsVisible="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Settings" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Enable Fn+Q integration"
+                                           Description="Listen for Lenovo power-mode changes on this computer.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="LegionFnQEnabledSwitch"
+                                  Click="LegionFnQEnabledClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Take over fan preset"
+                                           Description="Apply the mapped THRM manual preset whenever Fn+Q changes modes.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="LegionFnQTakeOverFanSwitch"
+                                  Click="LegionFnQTakeOverFanClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LegionFnQQuietMappingSetting"
+                                           Content="Quiet"
+                                           Description="Fn+Q Quiet mode.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid ColumnDefinitions="Auto,132,Auto,104" ColumnSpacing="8">
+                      <TextBlock Text="Gear" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQQuietGearComboBox"
+                                     Grid.Column="1"
+                                     Classes="compact-settings-combo"
+                                     Tag="Quiet:gear"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Quiet" />
+                        <ui:FAComboBoxItem Content="Standard" />
+                        <ui:FAComboBoxItem Content="Strong" />
+                        <ui:FAComboBoxItem Content="Overclock" />
+                      </ui:FAComboBox>
+                      <TextBlock Grid.Column="2" Text="Level" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQQuietLevelComboBox"
+                                     Grid.Column="3"
+                                     Classes="compact-settings-combo"
+                                     Tag="Quiet:level"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Low" />
+                        <ui:FAComboBoxItem Content="Medium" />
+                        <ui:FAComboBoxItem Content="High" />
+                      </ui:FAComboBox>
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LegionFnQBalanceMappingSetting"
+                                           Content="Balanced"
+                                           Description="Fn+Q Balance mode.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid ColumnDefinitions="Auto,132,Auto,104" ColumnSpacing="8">
+                      <TextBlock Text="Gear" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQBalanceGearComboBox"
+                                     Grid.Column="1"
+                                     Classes="compact-settings-combo"
+                                     Tag="Balance:gear"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Quiet" />
+                        <ui:FAComboBoxItem Content="Standard" />
+                        <ui:FAComboBoxItem Content="Strong" />
+                        <ui:FAComboBoxItem Content="Overclock" />
+                      </ui:FAComboBox>
+                      <TextBlock Grid.Column="2" Text="Level" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQBalanceLevelComboBox"
+                                     Grid.Column="3"
+                                     Classes="compact-settings-combo"
+                                     Tag="Balance:level"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Low" />
+                        <ui:FAComboBoxItem Content="Medium" />
+                        <ui:FAComboBoxItem Content="High" />
+                      </ui:FAComboBox>
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LegionFnQPerformanceMappingSetting"
+                                           Content="Performance"
+                                           Description="Fn+Q Performance mode.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid ColumnDefinitions="Auto,132,Auto,104" ColumnSpacing="8">
+                      <TextBlock Text="Gear" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQPerformanceGearComboBox"
+                                     Grid.Column="1"
+                                     Classes="compact-settings-combo"
+                                     Tag="Performance:gear"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Quiet" />
+                        <ui:FAComboBoxItem Content="Standard" />
+                        <ui:FAComboBoxItem Content="Strong" />
+                        <ui:FAComboBoxItem Content="Overclock" />
+                      </ui:FAComboBox>
+                      <TextBlock Grid.Column="2" Text="Level" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQPerformanceLevelComboBox"
+                                     Grid.Column="3"
+                                     Classes="compact-settings-combo"
+                                     Tag="Performance:level"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Low" />
+                        <ui:FAComboBoxItem Content="Medium" />
+                        <ui:FAComboBoxItem Content="High" />
+                      </ui:FAComboBox>
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LegionFnQExtremeMappingSetting"
+                                           Content="Extreme"
+                                           Description="Fn+Q Extreme mode.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid ColumnDefinitions="Auto,132,Auto,104" ColumnSpacing="8">
+                      <TextBlock Text="Gear" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQExtremeGearComboBox"
+                                     Grid.Column="1"
+                                     Classes="compact-settings-combo"
+                                     Tag="Extreme:gear"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Quiet" />
+                        <ui:FAComboBoxItem Content="Standard" />
+                        <ui:FAComboBoxItem Content="Strong" />
+                        <ui:FAComboBoxItem Content="Overclock" />
+                      </ui:FAComboBox>
+                      <TextBlock Grid.Column="2" Text="Level" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQExtremeLevelComboBox"
+                                     Grid.Column="3"
+                                     Classes="compact-settings-combo"
+                                     Tag="Extreme:level"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Low" />
+                        <ui:FAComboBoxItem Content="Medium" />
+                        <ui:FAComboBoxItem Content="High" />
+                      </ui:FAComboBox>
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="LegionFnQGodModeMappingSetting"
+                                           Content="God mode"
+                                           Description="Fn+Q God Mode.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid ColumnDefinitions="Auto,132,Auto,104" ColumnSpacing="8">
+                      <TextBlock Text="Gear" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQGodModeGearComboBox"
+                                     Grid.Column="1"
+                                     Classes="compact-settings-combo"
+                                     Tag="GodMode:gear"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Quiet" />
+                        <ui:FAComboBoxItem Content="Standard" />
+                        <ui:FAComboBoxItem Content="Strong" />
+                        <ui:FAComboBoxItem Content="Overclock" />
+                      </ui:FAComboBox>
+                      <TextBlock Grid.Column="2" Text="Level" VerticalAlignment="Center" />
+                      <ui:FAComboBox x:Name="LegionFnQGodModeLevelComboBox"
+                                     Grid.Column="3"
+                                     Classes="compact-settings-combo"
+                                     Tag="GodMode:level"
+                                     SelectionChanged="LegionFnQMappingSelectionChanged">
+                        <ui:FAComboBoxItem Content="Low" />
+                        <ui:FAComboBoxItem Content="Medium" />
+                        <ui:FAComboBoxItem Content="High" />
+                      </ui:FAComboBox>
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+            </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer x:Name="DiagnosticsPage"
+                        Classes="page-scroll"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24" Spacing="16">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Diagnostics" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Inspect THRM Core state and enable diagnostic logging when troubleshooting."
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <ui:FASettingsExpander Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Core diagnostics"
+                                     Description="Use these controls only when you need to investigate a problem."
+                                     IsExpanded="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="Bug" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Content="Diagnostic logging"
+                                           Description="Include debug-level events in THRM Core logs.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <ToggleSwitch x:Name="DebugModeSwitch"
+                                  IsEnabled="False"
+                                  Click="DebugModeClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Core snapshot"
+                                           Description="Read the current Core state without changing it.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Button x:Name="RefreshDiagnosticsButton"
+                            Content="Refresh"
+                            IsEnabled="False"
+                            Click="RefreshDiagnosticsClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem>
+                  <TextBox x:Name="DiagnosticsSnapshotTextBox"
+                           AcceptsReturn="True"
+                           IsReadOnly="True"
+                           MinHeight="224"
+                           MaxHeight="480"
+                           FontFamily="Consolas"
+                           FontSize="12"
+                           Text="No snapshot loaded."
+                           TextWrapping="NoWrap"
+                           ScrollViewer.VerticalScrollBarVisibility="Auto"
+                           ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem Content="Diagnostic archive"
+                                           Description="Save a support-ready copy of the current Core state and recent local logs. The ZIP may include hardware and configuration details.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Button x:Name="ExportDiagnosticsButton"
+                            Content="Export ZIP"
+                            IsEnabled="False"
+                            Click="ExportDiagnosticsClick" />
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+              </ui:FASettingsExpander>
+
+              <ui:FASettingsExpander x:Name="DeviceDebugExpander"
+                                     Theme="{StaticResource THRMSettingsExpanderTheme}"
+                                     Header="Device command"
+                                     Description="Advanced support tool."
+                                     IsExpanded="False"
+                                     IsEnabled="False">
+                <ui:FASettingsExpander.IconSource>
+                  <icons:FluentIconSource Icon="DeveloperBoard" />
+                </ui:FASettingsExpander.IconSource>
+                <ui:FASettingsExpanderItem Padding="0"
+                                           MinHeight="0"
+                                           Background="Transparent"
+                                           HorizontalContentAlignment="Stretch">
+                  <ui:FASettingsExpanderItem.Resources>
+                    <Thickness x:Key="SettingsExpanderItemContentMargin">0</Thickness>
+                  </ui:FASettingsExpanderItem.Resources>
+                  <ui:FAInfoBar HorizontalAlignment="Stretch"
+                                IsOpen="True"
+                                IsClosable="False"
+                                Severity="Warning"
+                                Title="Firmware commands"
+                                Message="Send only a command supplied by THRM support; it is written directly to the connected device." />
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="DeviceDebugCommandSetting"
+                                           Classes="last-visible-setting"
+                                           Content="Hex command"
+                                           Description="Enable diagnostic logging first.">
+                  <ui:FASettingsExpanderItem.Footer>
+                    <Grid ColumnDefinitions="220,Auto" ColumnSpacing="8">
+                      <TextBox x:Name="DeviceDebugCommandTextBox"
+                               Grid.Column="0"
+                               IsEnabled="False"
+                               FontFamily="Consolas"
+                               PlaceholderText="27 or 5A A5 27 02 29"
+                               AutomationProperties.Name="Device firmware command" />
+                      <Button x:Name="SendDeviceDebugCommandButton"
+                              Grid.Column="1"
+                              Classes="accent"
+                              Content="Send"
+                              IsEnabled="False"
+                              Click="SendDeviceDebugCommandClick" />
+                    </Grid>
+                  </ui:FASettingsExpanderItem.Footer>
+                </ui:FASettingsExpanderItem>
+                <ui:FASettingsExpanderItem x:Name="DeviceDebugResultSetting"
+                                           IsVisible="False">
+                  <TextBox x:Name="DeviceDebugResultTextBox"
+                           AcceptsReturn="True"
+                           IsReadOnly="True"
+                           MinHeight="120"
+                           MaxHeight="320"
+                           FontFamily="Consolas"
+                           FontSize="12"
+                           TextWrapping="NoWrap"
+                           ScrollViewer.VerticalScrollBarVisibility="Auto"
+                           ScrollViewer.HorizontalScrollBarVisibility="Auto" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>
             </StackPanel>
@@ -1037,11 +1862,11 @@
                   <icons:FluentIconSource Icon="Info" />
                 </ui:FASettingsExpander.IconSource>
                 <ui:FASettingsExpanderItem Description="Migrated IPC slice.">
-                  <TextBlock Text="Connection, fan curve editing, temperature history, fan control, device settings, and Core actions."
+                  <TextBlock Text="Connection, fan curve editing, temperature history, fan control, device settings, diagnostics, RTSS overlay, monitoring source selection, and Core actions."
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
-                <ui:FASettingsExpanderItem Description="Remaining legacy features.">
-                  <TextBlock Text="Noise calibration, sensor selection, and other system settings remain in the legacy Wails frontend."
+                <ui:FASettingsExpanderItem Description="Remaining legacy feature.">
+                  <TextBlock Text="Noise calibration remains in the legacy Wails frontend."
                              TextWrapping="Wrap" />
                 </ui:FASettingsExpanderItem>
               </ui:FASettingsExpander>

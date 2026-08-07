@@ -14,6 +14,8 @@ internal static class Program
             AnimatedContentClip.SelfCheck();
             TimeCurveScheduleState.SelfCheck();
             TemperatureHistoryPreview.SelfCheck();
+            DiagnosticArchive.SelfCheck();
+            RtssOverlayLayout.SelfCheck();
             return;
         }
 

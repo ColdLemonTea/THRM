@@ -1,11 +1,15 @@
 using System.Globalization;
+using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
@@ -13,6 +17,8 @@ using Avalonia.Media;
 using Avalonia.Media.Transformation;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using FluentIcons.Avalonia.Fluent;
 using FluentAvalonia.UI.Controls;
@@ -319,6 +325,144 @@ internal static class LightStripLogic
     };
 }
 
+internal static class DiagnosticArchive
+{
+    private const int MaximumLogsPerDirectory = 8;
+    private const long MaximumLogBytes = 2L * 1024 * 1024;
+    private static readonly JsonSerializerOptions ArchiveJsonOptions = new(ThrmIpcClient.JsonOptions)
+    {
+        WriteIndented = true,
+    };
+
+    public static void Write(
+        Stream destination,
+        JsonElement config,
+        JsonElement debug,
+        DeviceStatusSnapshot status)
+    {
+        using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
+        var manifest = archive.CreateEntry("diagnostics.json", CompressionLevel.Fastest);
+        using (var manifestStream = manifest.Open())
+        {
+            JsonSerializer.Serialize(manifestStream, new
+            {
+                createdAt = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                app = "THRM",
+                gui = "Avalonia",
+                protocol = ThrmIpcClient.ProtocolVersion,
+                os = RuntimeInformation.OSDescription,
+                arch = RuntimeInformation.ProcessArchitecture.ToString(),
+                numCpu = Environment.ProcessorCount,
+                hardware = status.Temperature,
+                device = status,
+                debug,
+                config,
+            }, ArchiveJsonOptions);
+        }
+
+        AddRecentLogs(archive, Path.Combine(AppContext.BaseDirectory, "logs"), "app");
+        AddRecentLogs(archive, Path.Combine(AppContext.BaseDirectory, "bridge", "logs"), "bridge");
+        if (OperatingSystem.IsLinux())
+        {
+            AddRecentLogs(archive, LinuxFallbackLogDirectory(), "fallback");
+        }
+    }
+
+    public static void SelfCheck()
+    {
+        using var config = JsonDocument.Parse("{\"autoControl\":true}");
+        using var debug = JsonDocument.Parse("{\"debugMode\":false}");
+        using var output = new MemoryStream();
+        Write(output, config.RootElement, debug.RootElement, new DeviceStatusSnapshot
+        {
+            Connected = true,
+            Model = "BS3",
+        });
+        output.Position = 0;
+        using var archive = new ZipArchive(output, ZipArchiveMode.Read, leaveOpen: true);
+        using var manifest = JsonDocument.Parse(archive.GetEntry("diagnostics.json")?.Open()
+            ?? throw new InvalidOperationException("Diagnostic archive manifest was not written."));
+        if (manifest.RootElement.GetProperty("app").GetString() != "THRM"
+            || !manifest.RootElement.GetProperty("config").GetProperty("autoControl").GetBoolean()
+            || !manifest.RootElement.GetProperty("device").GetProperty("connected").GetBoolean())
+        {
+            throw new InvalidOperationException("Diagnostic archive self-check failed.");
+        }
+    }
+
+    private static void AddRecentLogs(ZipArchive archive, string directory, string prefix)
+    {
+        try
+        {
+            foreach (var file in new DirectoryInfo(directory)
+                         .EnumerateFiles("*.log", SearchOption.TopDirectoryOnly)
+                         .OrderByDescending(item => item.LastWriteTimeUtc)
+                         .Take(MaximumLogsPerDirectory))
+            {
+                try
+                {
+                    var entry = archive.CreateEntry($"logs/{prefix}-{file.Name}", CompressionLevel.Fastest);
+                    using var destination = entry.Open();
+                    using var source = new FileStream(
+                        file.FullName,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    CopyAtMost(source, destination, MaximumLogBytes);
+                }
+                catch (IOException)
+                {
+                    // A rolling log can disappear or be replaced while the archive is built.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Keep the archive useful even when one optional log is unavailable.
+                }
+            }
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // Logs are optional.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Logs are optional.
+        }
+    }
+
+    private static void CopyAtMost(Stream source, Stream destination, long maximumBytes)
+    {
+        var buffer = new byte[81920];
+        while (maximumBytes > 0)
+        {
+            var read = source.Read(buffer, 0, (int)Math.Min(buffer.Length, maximumBytes));
+            if (read == 0)
+            {
+                return;
+            }
+
+            destination.Write(buffer, 0, read);
+            maximumBytes -= read;
+        }
+    }
+
+    private static string LinuxFallbackLogDirectory()
+    {
+        var stateHome = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
+        if (Path.IsPathRooted(stateHome))
+        {
+            return Path.Combine(stateHome, "thrm", "logs");
+        }
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".local",
+            "state",
+            "thrm",
+            "logs");
+    }
+}
+
 public partial class MainWindow : Window
 {
     private readonly ThrmIpcClient _ipc = new();
@@ -328,8 +472,17 @@ public partial class MainWindow : Window
     private bool _deviceConnected;
     private bool _deviceStateKnown;
     private bool _autoControl;
+    private string _tempSource = "max";
+    private int _tempSampleCount = 1;
     private bool _customSpeedEnabled;
     private int _customSpeedRpm = 2000;
+    private Dictionary<string, Dictionary<string, int>> _manualGearRpm = [];
+    private string _manualGearRpmGear = "标准";
+    private string _manualGearRpmLevel = "中";
+    private bool _updatingManualGearRpmControls;
+    private LegionFnQConfigSnapshot _legionFnQ = new();
+    private bool _legionFnQSupported;
+    private bool _updatingLegionFnQControls;
     private bool _gearLight;
     private LightStripSnapshot _lightStrip = LightStripLogic.Default();
     private bool _systemAutoStartEnabled;
@@ -342,6 +495,10 @@ public partial class MainWindow : Window
     private bool _powerOnStart;
     private string _smartStartStop = "off";
     private bool _updatingConfigControls;
+    private bool _updatingMonitoringControls;
+    private bool _updatingRtssControls;
+    private bool _updatingThemeControls;
+    private bool _updatingTemperatureControlControls;
     private bool _configKnown;
     private bool _writeInProgress;
     private string? _deviceModel;
@@ -360,7 +517,13 @@ public partial class MainWindow : Window
     private bool _fanCurveLoading;
     private bool _fanCurveLearningEnabled;
     private string _fanCurveLearningBias = "balanced";
+    private bool _fanCurvePredictiveBoost = true;
+    private bool _fanCurveLaptopFanGuard = true;
+    private int _fanCurveTargetTemp = 68;
+    private bool _updatingCurveLearningControls;
     private readonly List<int> _learnedFanCurveOffsets = [];
+    private SpeedAvoidanceSnapshot _speedAvoidance = new();
+    private bool _updatingSpeedAvoidanceControls;
     private readonly List<TemperatureHistoryPointSnapshot> _temperatureHistory = [];
     private readonly List<TimelineEventSnapshot> _timelineEvents = [];
     private bool _temperatureHistoryKnown;
@@ -369,11 +532,48 @@ public partial class MainWindow : Window
     private int _temperatureHistoryRetentionHours = 1;
     private bool _updatingTemperatureHistoryControls;
     private int _deviceFanMaximumRpm = FanRatedRpm.FallbackRpm;
+    private TemperatureSnapshot? _latestTemperature;
+    private readonly HashSet<string> _selectedCpuSensors = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _cpuSensorSelectionDraft = new(StringComparer.Ordinal);
+    private bool _cpuSensorSelectionFlyoutOpen;
+    private string _selectedGpuDevice = "auto";
+    private string _selectedGpuSensor = "auto";
+    private bool _disableGpuMonitoring;
+    private bool _ignoreDeviceOnReconnect = true;
+    private MonitoringSelectionOption[] _renderedCpuSensorOptions = [];
+    private MonitoringSelectionOption[] _renderedGpuDeviceOptions = [];
+    private MonitoringSelectionOption[] _renderedGpuSensorOptions = [];
+    private bool _rtssSupported;
+    private bool _rtssEnabled;
+    private int _rtssUpdateIntervalMs = 1000;
+    private string _rtssPositionMode = "anchor";
+    private int _rtssPositionX;
+    private int _rtssPositionY;
+    private bool _rtssPreviewInProgress;
+    private RtssOverlayLayoutStatus? _rtssAnchorLayout;
+    private bool _rtssAnchorBusy;
+    private string? _rtssAnchorError;
+    private string _themeMode = "system";
+    private bool _debugMode;
+    private bool _diagnosticsLoading;
+    private bool _diagnosticsExporting;
+    private bool _deviceDebugCommandInProgress;
+    private bool _updatingHotkeyControls;
+    private string _manualGearToggleHotkey = string.Empty;
+    private string _autoControlToggleHotkey = string.Empty;
+    private string _curveProfileToggleHotkey = string.Empty;
 
     private static readonly string[] ManualGearValues = ["静音", "标准", "强劲", "超频"];
     private static readonly string[] ManualLevelValues = ["低", "中", "高"];
+    private static readonly string[] LegionFnQPowerModeValues = ["Quiet", "Balance", "Performance", "Extreme", "GodMode"];
+    private static readonly string[] LearningBiasValues = ["balanced", "cooling", "quiet"];
+    private static readonly string[] TemperatureSourceValues = ["max", "cpu", "gpu"];
+    private static readonly int[] TemperatureSampleCountValues = [1, 2, 3, 5, 10];
     private static readonly string[] SmartStartStopValues = ["off", "immediate", "delayed"];
     private static readonly int[] TemperatureHistoryRetentionOptions = [1, 2, 3, 6, 12, 24];
+    private static readonly int[] RtssUpdateIntervalOptions = [250, 500, 1000, 2000];
+    private static readonly string[] ThemeModeValues = ["system", "light", "dark"];
+    private static readonly object CpuSensorAutomaticTag = new();
     private static readonly (int Value, string Label)[] TimeCurveScheduleWeekdays =
     [
         (1, "Mon"),
@@ -386,6 +586,10 @@ public partial class MainWindow : Window
     ];
 
     private readonly record struct ScheduleDayTag(string RuleId, int Day);
+    private readonly record struct MonitoringSelectionOption(string Key, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
     public MainWindow()
     {
@@ -393,12 +597,30 @@ public partial class MainWindow : Window
         foreach (var comboBox in new[]
                  {
                      FanCurveProfileComboBox,
-                     TemperatureHistoryRetentionComboBox,
-                     ManualGearComboBox,
-                     ManualLevelComboBox,
-                     LightModeComboBox,
+                      TemperatureHistoryRetentionComboBox,
+                      ManualGearComboBox,
+                      ManualLevelComboBox,
+                       FanCurveLearningBiasComboBox,
+                      LegionFnQQuietGearComboBox,
+                      LegionFnQQuietLevelComboBox,
+                      LegionFnQBalanceGearComboBox,
+                      LegionFnQBalanceLevelComboBox,
+                      LegionFnQPerformanceGearComboBox,
+                      LegionFnQPerformanceLevelComboBox,
+                      LegionFnQExtremeGearComboBox,
+                      LegionFnQExtremeLevelComboBox,
+                      LegionFnQGodModeGearComboBox,
+                      LegionFnQGodModeLevelComboBox,
+                      LightModeComboBox,
                      LightSpeedComboBox,
                      SmartStartStopComboBox,
+                     TempSourceComboBox,
+                     TempSampleCountComboBox,
+                     GpuDeviceComboBox,
+                     GpuSensorComboBox,
+                     RtssIntervalComboBox,
+                     RtssPositionModeComboBox,
+                     ThemeModeComboBox,
                  })
         {
             AttachComboBoxOpeningAnimation(comboBox);
@@ -437,6 +659,8 @@ public partial class MainWindow : Window
             "fan-control" => typeof(FanControlRoute),
             "device-settings" => typeof(DeviceSettingsRoute),
             "system" => typeof(SystemRoute),
+            "diagnostics" => typeof(DiagnosticsRoute),
+            "rtss-overlay" => typeof(RtssOverlayRoute),
             "about" => typeof(AboutRoute),
             _ => null,
         };
@@ -460,6 +684,17 @@ public partial class MainWindow : Window
         if (nextPageType == typeof(SystemRoute))
         {
             _ = RefreshSystemAutoStartAsync();
+        }
+
+        if (nextPageType == typeof(DiagnosticsRoute))
+        {
+            _ = RefreshDiagnosticsAsync();
+        }
+
+        if (nextPageType == typeof(RtssOverlayRoute))
+        {
+            _ = RefreshStateAsync();
+            _ = RefreshRtssAnchorAsync();
         }
     }
 
@@ -485,6 +720,8 @@ public partial class MainWindow : Window
     private sealed class FanControlRoute { }
     private sealed class DeviceSettingsRoute { }
     private sealed class SystemRoute { }
+    private sealed class DiagnosticsRoute { }
+    private sealed class RtssOverlayRoute { }
     private sealed class AboutRoute { }
 
     private sealed class MainWindowPageFactory(MainWindow owner) : IFANavigationPageFactory
@@ -497,6 +734,8 @@ public partial class MainWindow : Window
             var type when type == typeof(FanControlRoute) => owner.FanControlPage,
             var type when type == typeof(DeviceSettingsRoute) => owner.DeviceSettingsPage,
             var type when type == typeof(SystemRoute) => owner.SystemPage,
+            var type when type == typeof(DiagnosticsRoute) => owner.DiagnosticsPage,
+            var type when type == typeof(RtssOverlayRoute) => owner.RtssOverlayPage,
             var type when type == typeof(AboutRoute) => owner.AboutPage,
             _ => null,
         };
@@ -598,9 +837,26 @@ public partial class MainWindow : Window
                     });
                 }
                 break;
+            case "hotkey-triggered":
+                if (e.TryGetData<HotkeyTriggeredSnapshot>(out var hotkey) && hotkey is not null)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        var action = string.IsNullOrWhiteSpace(hotkey.Action) ? "Global shortcut" : hotkey.Action;
+                        var shortcut = string.IsNullOrWhiteSpace(hotkey.Shortcut) ? string.Empty : $" ({hotkey.Shortcut})";
+                        var message = string.IsNullOrWhiteSpace(hotkey.Message)
+                            ? $"{action}{shortcut}"
+                            : $"{action}{shortcut}: {hotkey.Message}";
+                        SetActivity(
+                            message,
+                            hotkey.Success ? FAInfoBarSeverity.Success : FAInfoBarSeverity.Error);
+                    });
+                }
+                break;
             case "device-connected":
             case "device-disconnected":
             case "config-update":
+            case "legion-fnq-support-update":
                 Dispatcher.UIThread.Post(() => _ = RefreshStateAsync());
                 break;
             case "device-error":
@@ -630,6 +886,213 @@ public partial class MainWindow : Window
         AutoControlSwitch.IsChecked = _autoControl;
         var action = enabled ? "Enable auto control" : "Disable auto control";
         await RunWriteAsync(action, () => _ipc.SetAutoControlAsync(enabled, _lifetime.Token));
+    }
+
+    private async void DebugModeClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingConfigControls || !CanChangeDiagnostics())
+        {
+            ApplyDiagnosticsControls();
+            return;
+        }
+
+        var enabled = DebugModeSwitch.IsChecked == true;
+        if (enabled == _debugMode)
+        {
+            return;
+        }
+
+        DebugModeSwitch.IsChecked = _debugMode;
+        if (!await RunWriteAsync(
+                enabled ? "Enable diagnostic logging" : "Disable diagnostic logging",
+                () => _ipc.SetDebugModeAsync(enabled, _lifetime.Token)))
+        {
+            ApplyDiagnosticsControls();
+        }
+    }
+
+    private async void RefreshDiagnosticsClick(object? sender, RoutedEventArgs e) =>
+        await RefreshDiagnosticsAsync();
+
+    private async void ExportDiagnosticsClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanExportDiagnostics())
+        {
+            return;
+        }
+
+        var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+        if (storageProvider is null || !storageProvider.CanSave)
+        {
+            SetActivity("Diagnostic export is unavailable because this platform cannot save files.", FAInfoBarSeverity.Error);
+            return;
+        }
+
+        _diagnosticsExporting = true;
+        SetActionAvailability();
+        try
+        {
+            var file = await storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export THRM diagnostics",
+                SuggestedFileName = $"THRM-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+                DefaultExtension = "zip",
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("ZIP archive") { Patterns = ["*.zip"] },
+                ],
+            });
+            if (file is null)
+            {
+                return;
+            }
+
+            SetActivity("Exporting diagnostic archive...", FAInfoBarSeverity.Informational, TimeSpan.FromSeconds(15));
+            var configTask = _ipc.GetConfigJsonAsync(_lifetime.Token);
+            var debugTask = _ipc.GetDebugInfoAsync(_lifetime.Token);
+            var statusTask = _ipc.GetDeviceStatusAsync(_lifetime.Token);
+            await Task.WhenAll(configTask, debugTask, statusTask);
+            await using var output = await file.OpenWriteAsync();
+            await Task.Run(
+                () => DiagnosticArchive.Write(output, configTask.Result, debugTask.Result, statusTask.Result),
+                _lifetime.Token);
+            SetActivity("Diagnostic archive exported.", FAInfoBarSeverity.Success);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // The window is closing.
+        }
+        catch (Exception ex)
+        {
+            SetActivity($"Diagnostic export failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _diagnosticsExporting = false;
+            SetActionAvailability();
+        }
+    }
+
+    private async Task RefreshDiagnosticsAsync()
+    {
+        if (!_ipc.IsConnected || _diagnosticsLoading || _writeInProgress)
+        {
+            return;
+        }
+
+        _diagnosticsLoading = true;
+        SetActionAvailability();
+        try
+        {
+            var snapshot = await _ipc.GetDebugInfoAsync(_lifetime.Token);
+            DiagnosticsSnapshotTextBox.Text = JsonSerializer.Serialize(
+                snapshot,
+                new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (Exception ex)
+        {
+            SetActivity($"Diagnostics refresh failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _diagnosticsLoading = false;
+            SetActionAvailability();
+        }
+    }
+
+    private async void SendDeviceDebugCommandClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanSendDeviceDebugCommand())
+        {
+            return;
+        }
+
+        var command = DeviceDebugCommandTextBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            SetActivity("Enter a hexadecimal device command first.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        _deviceDebugCommandInProgress = true;
+        SetActionAvailability();
+        try
+        {
+            var result = await _ipc.SendDeviceDebugCommandAsync(command, 900, _lifetime.Token);
+            DeviceDebugResultTextBox.Text = JsonSerializer.Serialize(
+                result,
+                new JsonSerializerOptions { WriteIndented = true });
+            DeviceDebugResultSetting.IsVisible = true;
+            DeviceDebugCommandSetting.Classes.Remove("last-visible-setting");
+            SetActivity("Device command completed.", FAInfoBarSeverity.Success);
+            await RefreshStateAsync();
+        }
+        catch (Exception ex)
+        {
+            SetActivity($"Device command failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _deviceDebugCommandInProgress = false;
+            SetActionAvailability();
+        }
+    }
+
+    private async void TempSourceSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingTemperatureControlControls)
+        {
+            return;
+        }
+
+        var source = SelectedCoreValue(TempSourceComboBox, TemperatureSourceValues);
+        if (source is null || !CanChangeMonitoringSources())
+        {
+            ApplyTemperatureControlControls();
+            return;
+        }
+
+        if (string.Equals(source, _tempSource, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set control temperature source",
+                () => PatchConfigAsync(root => root["tempSource"] = source)))
+        {
+            ApplyTemperatureControlControls();
+        }
+    }
+
+    private async void TempSampleCountSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingTemperatureControlControls)
+        {
+            return;
+        }
+
+        var index = TempSampleCountComboBox.SelectedIndex;
+        if (!CanChangeMonitoringSources()
+            || index < 0
+            || index >= TemperatureSampleCountValues.Length)
+        {
+            ApplyTemperatureControlControls();
+            return;
+        }
+
+        var count = TemperatureSampleCountValues[index];
+        if (count == _tempSampleCount)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set temperature smoothing",
+                () => PatchConfigAsync(root => root["tempSampleCount"] = count)))
+        {
+            ApplyTemperatureControlControls();
+        }
     }
 
     private async void CustomSpeedClick(object? sender, RoutedEventArgs e)
@@ -753,7 +1216,7 @@ public partial class MainWindow : Window
             Brightness = (int)Math.Round(Math.Clamp(e.NewValue, 0, 100)),
             Colors = _lightStrip.Colors.Select(CloneLightColor).ToList(),
         };
-        LightBrightnessValueText.Text = $"{_lightStrip.Brightness}%";
+        LightBrightnessValueText.Text = _lightStrip.Brightness.ToString();
     }
 
     private void LightColorChanged(object? sender, ColorChangedEventArgs e)
@@ -860,11 +1323,12 @@ public partial class MainWindow : Window
             SelectCoreValue(LightModeComboBox, LightStripLogic.ModeValues, _lightStrip.Mode);
             SelectCoreValue(LightSpeedComboBox, LightStripLogic.SpeedValues, _lightStrip.Speed);
             LightBrightnessSlider.Value = _lightStrip.Brightness;
-            LightBrightnessValueText.Text = $"{_lightStrip.Brightness}%";
+            LightBrightnessValueText.Text = _lightStrip.Brightness.ToString();
             LightSmartTemperatureDeviceSetting.IsVisible = _lightStrip.Mode == "smart_temp";
             LightSmartTemperatureInfoBar.IsOpen = _lightStrip.Mode == "smart_temp";
 
             var requiredColorCount = LightStripLogic.RequiredColorCount(_lightStrip.Mode);
+            LightColorPresetSetting.IsVisible = requiredColorCount > 0;
             LightColorsDeviceSetting.IsVisible = requiredColorCount > 0;
             LightColorSlot0.IsVisible = requiredColorCount >= 1;
             LightColorSlot1.IsVisible = requiredColorCount >= 2;
@@ -985,6 +1449,29 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void IgnoreDeviceOnReconnectClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingConfigControls || !CanChangeMonitoringSources())
+        {
+            IgnoreDeviceOnReconnectSwitch.IsChecked = _ignoreDeviceOnReconnect;
+            return;
+        }
+
+        var enabled = IgnoreDeviceOnReconnectSwitch.IsChecked == true;
+        if (enabled == _ignoreDeviceOnReconnect)
+        {
+            return;
+        }
+
+        IgnoreDeviceOnReconnectSwitch.IsChecked = _ignoreDeviceOnReconnect;
+        if (!await RunWriteAsync(
+                enabled ? "Keep configuration after reconnect" : "Use device state after reconnect",
+                () => PatchConfigAsync(root => root["ignoreDeviceOnReconnect"] = enabled)))
+        {
+            IgnoreDeviceOnReconnectSwitch.IsChecked = _ignoreDeviceOnReconnect;
+        }
+    }
+
     private bool CanChangeSystemAutoStart() =>
         _ipc.IsConnected
         && _systemAutoStartKnown
@@ -1085,6 +1572,372 @@ public partial class MainWindow : Window
         _ => "Not enabled",
     };
 
+    private void CpuSensorMenuFlyoutOpening(object? sender, EventArgs e)
+    {
+        MenuFlyoutOpening(sender, e);
+        _cpuSensorSelectionFlyoutOpen = true;
+        _cpuSensorSelectionDraft.Clear();
+        _cpuSensorSelectionDraft.UnionWith(_selectedCpuSensors);
+        _cpuSensorSelectionDraft.IntersectWith(BuildMonitoringOptions(_latestTemperature?.CpuSensors).Select(option => option.Key));
+
+        if (sender is FAMenuFlyout { Popup.Child: Control presenter })
+        {
+            presenter.MinWidth = 280;
+            presenter.MaxWidth = 360;
+            presenter.MaxHeight = 360;
+        }
+
+        ApplyMonitoringControls();
+    }
+
+    private async void CpuSensorMenuFlyoutClosed(object? sender, EventArgs e)
+    {
+        if (!_cpuSensorSelectionFlyoutOpen)
+        {
+            return;
+        }
+
+        _cpuSensorSelectionFlyoutOpen = false;
+        var selection = BuildMonitoringOptions(_latestTemperature?.CpuSensors)
+            .Where(option => _cpuSensorSelectionDraft.Contains(option.Key))
+            .Select(option => option.Key)
+            .ToArray();
+        _cpuSensorSelectionDraft.Clear();
+        if (selection.SequenceEqual(_selectedCpuSensors.OrderBy(sensor => sensor, StringComparer.Ordinal)))
+        {
+            ApplyMonitoringControls();
+            return;
+        }
+
+        if (!CanChangeMonitoringSources())
+        {
+            ApplyMonitoringControls();
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set CPU temperature sensors",
+                () => PatchConfigAsync(root => root["cpuSensors"] = JsonSerializer.SerializeToNode(
+                    selection,
+                    ThrmIpcClient.JsonOptions))))
+        {
+            ApplyMonitoringControls();
+        }
+    }
+
+    private void CpuSensorSelectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not FAToggleMenuFlyoutItem menuItem
+            || _updatingMonitoringControls
+            || !_cpuSensorSelectionFlyoutOpen)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(menuItem.Tag, CpuSensorAutomaticTag))
+        {
+            _cpuSensorSelectionDraft.Clear();
+        }
+        else if (menuItem.Tag is string key && !_cpuSensorSelectionDraft.Add(key))
+        {
+            _cpuSensorSelectionDraft.Remove(key);
+        }
+
+        Dispatcher.UIThread.Post(ApplyMonitoringControls, DispatcherPriority.Background);
+    }
+
+    private async void GpuMonitoringClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingMonitoringControls || !CanChangeMonitoringSources())
+        {
+            ApplyMonitoringControls();
+            return;
+        }
+
+        var disabled = GpuMonitoringSwitch.IsChecked != true;
+        if (disabled == _disableGpuMonitoring)
+        {
+            return;
+        }
+
+        GpuMonitoringSwitch.IsChecked = !_disableGpuMonitoring;
+        if (!await RunWriteAsync(
+                disabled ? "Disable GPU monitoring" : "Enable GPU monitoring",
+                () => PatchConfigAsync(root => root["disableGpuMonitoring"] = disabled)))
+        {
+            ApplyMonitoringControls();
+        }
+    }
+
+    private async void GpuDeviceSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingMonitoringControls)
+        {
+            return;
+        }
+
+        if (GpuDeviceComboBox.SelectedItem is not MonitoringSelectionOption option
+            || !CanChangeMonitoringSources())
+        {
+            ApplyMonitoringControls();
+            return;
+        }
+
+        if (string.Equals(option.Key, _selectedGpuDevice, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set GPU monitoring device",
+                () => PatchConfigAsync(root => root["gpuDevice"] = option.Key)))
+        {
+            ApplyMonitoringControls();
+        }
+    }
+
+    private async void GpuSensorSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingMonitoringControls)
+        {
+            return;
+        }
+
+        if (GpuSensorComboBox.SelectedItem is not MonitoringSelectionOption option
+            || !CanChangeMonitoringSources())
+        {
+            ApplyMonitoringControls();
+            return;
+        }
+
+        if (string.Equals(option.Key, _selectedGpuSensor, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set GPU temperature sensor",
+                () => PatchConfigAsync(root => root["gpuSensor"] = option.Key)))
+        {
+            ApplyMonitoringControls();
+        }
+    }
+
+    private bool CanChangeMonitoringSources() =>
+        _ipc.IsConnected
+        && _configKnown
+        && !_writeInProgress;
+
+    private async Task<bool> PatchConfigAsync(Action<JsonObject> patch)
+    {
+        var config = await _ipc.GetConfigJsonAsync(_lifetime.Token);
+        if (config.ValueKind != JsonValueKind.Object
+            || JsonNode.Parse(config.GetRawText()) is not JsonObject root)
+        {
+            throw new JsonException("Core configuration must be a JSON object.");
+        }
+
+        patch(root);
+        using var document = JsonDocument.Parse(root.ToJsonString(ThrmIpcClient.JsonOptions));
+        return await _ipc.UpdateConfigAsync(document.RootElement.Clone(), _lifetime.Token);
+    }
+
+    private async void RtssEnabledClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingRtssControls || !CanChangeRtss())
+        {
+            ApplyRtssControls();
+            return;
+        }
+
+        var enabled = RtssEnabledSwitch.IsChecked == true;
+        if (enabled == _rtssEnabled)
+        {
+            return;
+        }
+
+        RtssEnabledSwitch.IsChecked = _rtssEnabled;
+        if (!await RunWriteAsync(
+                enabled ? "Enable RTSS overlay" : "Disable RTSS overlay",
+                () => PatchRtssConfigAsync(rtss => rtss["enabled"] = enabled)))
+        {
+            ApplyRtssControls();
+        }
+    }
+
+    private async void RtssIntervalSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingRtssControls)
+        {
+            return;
+        }
+
+        var index = RtssIntervalComboBox.SelectedIndex;
+        if (!CanChangeRtss() || index < 0 || index >= RtssUpdateIntervalOptions.Length)
+        {
+            ApplyRtssControls();
+            return;
+        }
+
+        var interval = RtssUpdateIntervalOptions[index];
+        if (interval == _rtssUpdateIntervalMs)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set RTSS update interval",
+                () => PatchRtssConfigAsync(rtss => rtss["updateIntervalMs"] = interval)))
+        {
+            ApplyRtssControls();
+        }
+    }
+
+    private async void RtssPositionModeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingRtssControls)
+        {
+            return;
+        }
+
+        var mode = RtssPositionModeComboBox.SelectedIndex == 1 ? "custom" : "anchor";
+        if (!CanChangeRtss())
+        {
+            ApplyRtssControls();
+            return;
+        }
+
+        if (string.Equals(mode, _rtssPositionMode, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                mode == "custom" ? "Use custom RTSS position" : "Use RTSS OverlayEditor position",
+                () => PatchRtssConfigAsync(rtss => rtss["positionMode"] = mode)))
+        {
+            ApplyRtssControls();
+        }
+    }
+
+    private async void RtssPreviewPositionClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeRtss() || _rtssPositionMode != "custom" || _rtssPreviewInProgress)
+        {
+            ApplyRtssControls();
+            return;
+        }
+
+        if (!TryReadRtssPosition(out var x, out var y, out var error))
+        {
+            SetActivity(error, FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        _rtssPreviewInProgress = true;
+        SetActionAvailability();
+        try
+        {
+            if (!await _ipc.PreviewRtssPositionAsync("custom", x, y, _lifetime.Token))
+            {
+                SetActivity("RTSS position preview was rejected; the saved position is unchanged.", FAInfoBarSeverity.Warning);
+                return;
+            }
+
+            RtssPositionStatusText.Text = $"Previewing X {x}, Y {y}. Select Apply to save this offset.";
+            SetActivity("RTSS position preview updated; changes are not saved.", FAInfoBarSeverity.Informational);
+        }
+        catch (Exception ex)
+        {
+            SetActivity($"RTSS position preview failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _rtssPreviewInProgress = false;
+            SetActionAvailability();
+        }
+    }
+
+    private async void RefreshRtssAnchorClick(object? sender, RoutedEventArgs e) =>
+        await RefreshRtssAnchorAsync();
+
+    private async void CreateRtssAnchorClick(object? sender, RoutedEventArgs e)
+    {
+        var layout = _rtssAnchorLayout;
+        if (_rtssAnchorBusy
+            || !_rtssSupported
+            || _rtssPositionMode != "anchor"
+            || layout is not { Supported: true, Installed: true }
+            || string.IsNullOrWhiteSpace(layout.LayoutPath)
+            || string.Equals(layout.AnchorState, "confirmed", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!await ConfirmActionAsync(
+                "Set up RTSS anchor?",
+                "THRM will back up the active OverlayEditor layout, then add or update an empty one-percent anchor at its bottom.",
+                "Set up anchor"))
+        {
+            return;
+        }
+
+        _rtssAnchorBusy = true;
+        _rtssAnchorError = null;
+        ApplyRtssControls();
+        try
+        {
+            _rtssAnchorLayout = await Task.Run(RtssOverlayLayout.CreateAnchor, _lifetime.Token);
+            var backup = _rtssAnchorLayout.BackupPath;
+            SetActivity(
+                string.IsNullOrWhiteSpace(backup)
+                    ? "RTSS anchor is ready."
+                    : $"RTSS anchor is ready. Backup: {Path.GetFileName(backup)}",
+                FAInfoBarSeverity.Success);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // The window is closing.
+        }
+        catch (Exception ex)
+        {
+            _rtssAnchorError = ex.Message;
+            SetActivity($"RTSS anchor setup failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _rtssAnchorBusy = false;
+            ApplyRtssControls();
+        }
+    }
+
+    private async void RtssApplyPositionClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeRtss() || _rtssPositionMode != "custom")
+        {
+            ApplyRtssControls();
+            return;
+        }
+
+        if (!TryReadRtssPosition(out var x, out var y, out var error))
+        {
+            SetActivity(error, FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Apply RTSS custom position",
+                () => PatchRtssConfigAsync(rtss =>
+                {
+                    rtss["positionMode"] = "custom";
+                    rtss["positionX"] = x;
+                    rtss["positionY"] = y;
+                })))
+        {
+            ApplyRtssControls();
+        }
+    }
+
     private async void PowerOnStartClick(object? sender, RoutedEventArgs e)
     {
         if (!CanChangeDeviceFeatures())
@@ -1118,6 +1971,175 @@ public partial class MainWindow : Window
         await RunWriteAsync("Set smart start and stop", () => _ipc.SetSmartStartStopAsync(value, _lifetime.Token));
     }
 
+    private async void ThemeModeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingThemeControls)
+        {
+            return;
+        }
+
+        var mode = SelectedCoreValue(ThemeModeComboBox, ThemeModeValues);
+        if (mode is null || !CanChangeTheme())
+        {
+            ApplyThemeControls();
+            return;
+        }
+
+        if (string.Equals(mode, _themeMode, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var previousMode = _themeMode;
+        _themeMode = mode;
+        ApplyThemeControls();
+        if (!await RunWriteAsync(
+                mode == "system" ? "Use system theme" : $"Use {mode} theme",
+                () => PatchConfigAsync(root => root["themeMode"] = mode)))
+        {
+            _themeMode = previousMode;
+            ApplyThemeControls();
+        }
+    }
+
+    private void HotkeyTextBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox textBox)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (_updatingHotkeyControls)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Escape)
+        {
+            ApplyHotkeyControls();
+            return;
+        }
+
+        if (!CanChangeHotkeys())
+        {
+            ApplyHotkeyControls();
+            return;
+        }
+
+        if (e.Key is Key.Back or Key.Delete)
+        {
+            textBox.Text = string.Empty;
+            return;
+        }
+
+        var shortcut = FormatHotkey(e.Key, e.KeyModifiers);
+        if (shortcut is null)
+        {
+            SetActivity(
+                "Use Ctrl, Alt, Shift, or Win with A-Z, 0-9, or F1-F12.",
+                FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        textBox.Text = shortcut;
+    }
+
+    private async void HotkeyTextBoxLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingHotkeyControls)
+        {
+            return;
+        }
+
+        if (!CanChangeHotkeys())
+        {
+            ApplyHotkeyControls();
+            return;
+        }
+
+        await SaveHotkeysAsync(
+            ManualGearHotkeyTextBox.Text,
+            AutoControlHotkeyTextBox.Text,
+            CurveProfileHotkeyTextBox.Text);
+    }
+
+    private async Task SaveHotkeysAsync(string? manual, string? auto, string? curve)
+    {
+        manual = NormalizeHotkeyValue(manual);
+        auto = NormalizeHotkeyValue(auto);
+        curve = NormalizeHotkeyValue(curve);
+        if (string.Equals(manual, _manualGearToggleHotkey, StringComparison.Ordinal)
+            && string.Equals(auto, _autoControlToggleHotkey, StringComparison.Ordinal)
+            && string.Equals(curve, _curveProfileToggleHotkey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var shortcut in new[] { manual, auto, curve })
+        {
+            if (!string.IsNullOrEmpty(shortcut) && !seen.Add(shortcut))
+            {
+                ApplyHotkeyControls();
+                SetActivity("Each non-empty global shortcut must be unique.", FAInfoBarSeverity.Warning);
+                return;
+            }
+        }
+
+        if (!await RunWriteAsync(
+                "Update keyboard shortcuts",
+                () => PatchConfigAsync(root =>
+                {
+                    root["manualGearToggleHotkey"] = manual;
+                    root["autoControlToggleHotkey"] = auto;
+                    root["curveProfileToggleHotkey"] = curve;
+                })))
+        {
+            ApplyHotkeyControls();
+        }
+    }
+
+    internal static string? FormatHotkey(Key key, KeyModifiers modifiers)
+    {
+        var parts = new List<string>(5);
+        if ((modifiers & KeyModifiers.Control) != 0)
+        {
+            parts.Add("Ctrl");
+        }
+
+        if ((modifiers & KeyModifiers.Alt) != 0)
+        {
+            parts.Add("Alt");
+        }
+
+        if ((modifiers & KeyModifiers.Shift) != 0)
+        {
+            parts.Add("Shift");
+        }
+
+        if ((modifiers & KeyModifiers.Meta) != 0)
+        {
+            parts.Add("Win");
+        }
+
+        var mainKey = key switch
+        {
+            >= Key.A and <= Key.Z => key.ToString(),
+            >= Key.D0 and <= Key.D9 => ((int)key - (int)Key.D0).ToString(CultureInfo.InvariantCulture),
+            >= Key.NumPad0 and <= Key.NumPad9 => ((int)key - (int)Key.NumPad0).ToString(CultureInfo.InvariantCulture),
+            >= Key.F1 and <= Key.F12 => key.ToString(),
+            _ => null,
+        };
+        if (mainKey is null || parts.Count == 0)
+        {
+            return null;
+        }
+
+        parts.Add(mainKey);
+        return string.Join("+", parts);
+    }
+
     private async void ApplyManualGearClick(object? sender, RoutedEventArgs e)
     {
         if (!CanChangeManualControl())
@@ -1136,6 +2158,24 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (!IsBs1)
+        {
+            if (!TryReadManualGearRpm(gear, level, out var rpm, out var error))
+            {
+                SetActivity(error, FAInfoBarSeverity.Warning);
+                return;
+            }
+
+            if (rpm != GetManualGearRpm(gear, level)
+                && !await RunWriteAsync(
+                    "Update manual preset speed",
+                    () => PatchManualGearRpmAsync(gear, level, rpm)))
+            {
+                ApplyManualGearRpmControls();
+                return;
+            }
+        }
+
         var synchronized = await RunWriteAsync(
             "Apply manual fan preset",
             () => _ipc.SetManualGearAsync(gear, level, _lifetime.Token));
@@ -1145,7 +2185,296 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ManualSelectionChanged(object? sender, SelectionChangedEventArgs e) => SetActionAvailability();
+    private void ManualSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingConfigControls || _updatingManualGearRpmControls)
+        {
+            return;
+        }
+
+        ApplyManualGearRpmControls();
+        SetActionAvailability();
+    }
+
+    private Task<bool> PatchManualGearRpmAsync(string gear, string level, int rpm) =>
+        PatchConfigAsync(root =>
+        {
+            if (root["manualGearRpm"] is not JsonObject gearMap)
+            {
+                gearMap = new JsonObject();
+                root["manualGearRpm"] = gearMap;
+            }
+
+            if (gearMap[gear] is not JsonObject levelMap)
+            {
+                levelMap = new JsonObject();
+                gearMap[gear] = levelMap;
+            }
+
+            levelMap[level] = rpm;
+        });
+
+    private async void LegionFnQEnabledClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingLegionFnQControls || !CanChangeLegionFnQ())
+        {
+            ApplyLegionFnQControls();
+            return;
+        }
+
+        var enabled = LegionFnQEnabledSwitch.IsChecked == true;
+        if (enabled == _legionFnQ.Enabled)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                enabled ? "Enable Lenovo Fn+Q integration" : "Disable Lenovo Fn+Q integration",
+                () => PatchLegionFnQConfigAsync(config => config["enabled"] = enabled)))
+        {
+            ApplyLegionFnQControls();
+        }
+    }
+
+    private async void LegionFnQTakeOverFanClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingLegionFnQControls || !CanChangeLegionFnQ() || !_legionFnQ.Enabled)
+        {
+            ApplyLegionFnQControls();
+            return;
+        }
+
+        var takeOverFan = LegionFnQTakeOverFanSwitch.IsChecked == true;
+        if (takeOverFan == _legionFnQ.TakeOverFan)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                takeOverFan ? "Enable Fn+Q fan preset takeover" : "Disable Fn+Q fan preset takeover",
+                () => PatchLegionFnQConfigAsync(config => config["takeOverFan"] = takeOverFan)))
+        {
+            ApplyLegionFnQControls();
+        }
+    }
+
+    private async void LegionFnQMappingSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingLegionFnQControls
+            || sender is not FAComboBox comboBox
+            || comboBox.Tag is not string tag)
+        {
+            return;
+        }
+
+        var separator = tag.IndexOf(':');
+        var mode = separator > 0 ? tag[..separator] : string.Empty;
+        var field = separator > 0 ? tag[(separator + 1)..] : string.Empty;
+        if (!CanChangeLegionFnQ()
+            || !_legionFnQ.Enabled
+            || !_legionFnQ.TakeOverFan
+            || !LegionFnQPowerModeValues.Contains(mode)
+            || (field != "gear" && field != "level"))
+        {
+            ApplyLegionFnQControls();
+            return;
+        }
+
+        var values = field == "gear" ? ManualGearValues : ManualLevelValues;
+        var value = SelectedCoreValue(comboBox, values);
+        if (value is null)
+        {
+            ApplyLegionFnQControls();
+            return;
+        }
+
+        var target = GetLegionFnQTarget(mode);
+        var current = field == "gear" ? target.Gear : target.Level;
+        if (string.Equals(value, current, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                $"Update Fn+Q {mode} mapping",
+                () => PatchLegionFnQConfigAsync(config =>
+                {
+                    if (config["modeMapping"] is not JsonObject mappings)
+                    {
+                        mappings = new JsonObject();
+                        config["modeMapping"] = mappings;
+                    }
+
+                    if (mappings[mode] is not JsonObject mapping)
+                    {
+                        mapping = JsonSerializer.SerializeToNode(GetLegionFnQTarget(mode), ThrmIpcClient.JsonOptions) as JsonObject
+                            ?? new JsonObject();
+                        mappings[mode] = mapping;
+                    }
+
+                    mapping[field] = value;
+                })))
+        {
+            ApplyLegionFnQControls();
+        }
+    }
+
+    private Task<bool> PatchLegionFnQConfigAsync(Action<JsonObject> patch) =>
+        PatchConfigAsync(root =>
+        {
+            if (root["legionFnQ"] is not JsonObject config)
+            {
+                config = JsonSerializer.SerializeToNode(_legionFnQ, ThrmIpcClient.JsonOptions) as JsonObject
+                    ?? new JsonObject();
+                root["legionFnQ"] = config;
+            }
+
+            patch(config);
+        });
+
+    private async void FanCurveLearningEnabledClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingCurveLearningControls || !CanChangeCurveLearning())
+        {
+            ApplyCurveLearningControls();
+            return;
+        }
+
+        var enabled = FanCurveLearningEnabledSwitch.IsChecked == true;
+        if (enabled == _fanCurveLearningEnabled)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                enabled ? "Enable curve learning" : "Disable curve learning",
+                () => PatchSmartControlConfigAsync(config => config["learning"] = enabled)))
+        {
+            ApplyCurveLearningControls();
+        }
+    }
+
+    private async void FanCurveLearningBiasSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingCurveLearningControls)
+        {
+            return;
+        }
+
+        var bias = SelectedCoreValue(FanCurveLearningBiasComboBox, LearningBiasValues);
+        if (bias is null || !CanChangeCurveLearning())
+        {
+            ApplyCurveLearningControls();
+            return;
+        }
+
+        if (string.Equals(bias, _fanCurveLearningBias, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set curve learning bias",
+                () => PatchSmartControlConfigAsync(config => config["learningBias"] = bias)))
+        {
+            ApplyCurveLearningControls();
+        }
+    }
+
+    private async void FanCurvePredictiveBoostClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingCurveLearningControls || !CanChangeCurveLearning() || !_fanCurveLearningEnabled)
+        {
+            ApplyCurveLearningControls();
+            return;
+        }
+
+        var enabled = FanCurvePredictiveBoostSwitch.IsChecked == true;
+        if (enabled == _fanCurvePredictiveBoost)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                enabled ? "Enable predictive curve learning" : "Disable predictive curve learning",
+                () => PatchSmartControlConfigAsync(config => config["predictiveBoost"] = enabled)))
+        {
+            ApplyCurveLearningControls();
+        }
+    }
+
+    private async void FanCurveLaptopFanGuardClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingCurveLearningControls
+            || !CanChangeCurveLearning()
+            || !_fanCurveLearningEnabled
+            || !HasLaptopFanTelemetry)
+        {
+            ApplyCurveLearningControls();
+            return;
+        }
+
+        var enabled = FanCurveLaptopFanGuardSwitch.IsChecked == true;
+        if (enabled == _fanCurveLaptopFanGuard)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                enabled ? "Enable laptop fan guard" : "Disable laptop fan guard",
+                () => PatchSmartControlConfigAsync(config => config["laptopFanGuard"] = enabled)))
+        {
+            ApplyCurveLearningControls();
+        }
+    }
+
+    private async void ApplyFanCurveTargetTempClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeCurveLearning())
+        {
+            ApplyCurveLearningControls();
+            return;
+        }
+
+        var value = FanCurveTargetTempNumberBox.Value;
+        if (!double.IsFinite(value) || value != Math.Truncate(value) || value is < 45 or > 90)
+        {
+            SetActivity("Curve learning target temperature must be a whole number from 45 to 90 °C.", FAInfoBarSeverity.Warning);
+            return;
+        }
+
+        var targetTemp = (int)value;
+        if (targetTemp == _fanCurveTargetTemp)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Set curve learning target temperature",
+                () => PatchSmartControlConfigAsync(config => config["targetTemp"] = targetTemp)))
+        {
+            ApplyCurveLearningControls();
+        }
+    }
+
+    private Task<bool> PatchSmartControlConfigAsync(Action<JsonObject> patch) =>
+        PatchConfigAsync(root =>
+        {
+            if (root["smartControl"] is not JsonObject config)
+            {
+                config = new JsonObject
+                {
+                    ["learning"] = _fanCurveLearningEnabled,
+                    ["learningBias"] = _fanCurveLearningBias,
+                    ["predictiveBoost"] = _fanCurvePredictiveBoost,
+                    ["laptopFanGuard"] = _fanCurveLaptopFanGuard,
+                    ["targetTemp"] = _fanCurveTargetTemp,
+                };
+                root["smartControl"] = config;
+            }
+
+            patch(config);
+        });
 
     private async void TemperatureHistoryEnabledClick(object? sender, RoutedEventArgs e)
     {
@@ -1221,7 +2550,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void FanCurveProfileManageFlyoutOpening(object? sender, EventArgs e)
+    private static void MenuFlyoutOpening(object? sender, EventArgs e)
     {
         if (sender is not FAMenuFlyout flyout || flyout.Popup.Child is not Control presenter)
         {
@@ -1233,7 +2562,7 @@ public partial class MainWindow : Window
         presenter.RenderTransform = TransformOperations.Parse("translate(0px, -6px)");
     }
 
-    private static void FanCurveProfileManageFlyoutOpened(object? sender, EventArgs e)
+    private static void MenuFlyoutOpened(object? sender, EventArgs e)
     {
         if (sender is not FAMenuFlyout flyout || flyout.Popup.Child is not Control presenter)
         {
@@ -1490,6 +2819,66 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void SpeedAvoidanceEnabledClick(object? sender, RoutedEventArgs e)
+    {
+        if (_updatingSpeedAvoidanceControls || !CanChangeMonitoringSources())
+        {
+            ApplySpeedAvoidanceControls();
+            return;
+        }
+
+        var enabled = SpeedAvoidanceEnabledSwitch.IsChecked == true;
+        if (enabled == _speedAvoidance.Enabled)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                enabled ? "Enable speed avoidance" : "Disable speed avoidance",
+                () => PatchSpeedAvoidanceAsync(new SpeedAvoidanceSnapshot
+                {
+                    Enabled = enabled,
+                    MinRpm = _speedAvoidance.MinRpm,
+                    MaxRpm = _speedAvoidance.MaxRpm,
+                    MarginRpm = _speedAvoidance.MarginRpm,
+                    EmergencyBypassTemp = _speedAvoidance.EmergencyBypassTemp,
+                })))
+        {
+            ApplySpeedAvoidanceControls();
+        }
+    }
+
+    private async void SpeedAvoidanceValueChanged(FANumberBox sender, FANumberBoxValueChangedEventArgs e)
+    {
+        if (_updatingSpeedAvoidanceControls || !CanChangeMonitoringSources())
+        {
+            return;
+        }
+
+        if (!TryReadSpeedAvoidance(out var avoidance, out _))
+        {
+            return;
+        }
+
+        if (avoidance.MinRpm == _speedAvoidance.MinRpm
+            && avoidance.MaxRpm == _speedAvoidance.MaxRpm
+            && avoidance.MarginRpm == _speedAvoidance.MarginRpm
+            && avoidance.EmergencyBypassTemp == _speedAvoidance.EmergencyBypassTemp)
+        {
+            return;
+        }
+
+        if (!await RunWriteAsync(
+                "Update speed avoidance",
+                () => PatchSpeedAvoidanceAsync(avoidance)))
+        {
+            ApplySpeedAvoidanceControls();
+        }
+    }
+
+    private Task<bool> PatchSpeedAvoidanceAsync(SpeedAvoidanceSnapshot avoidance) =>
+        PatchConfigAsync(root => root["speedAvoidance"] = JsonSerializer.SerializeToNode(avoidance, ThrmIpcClient.JsonOptions));
+
     private async Task<bool> RunWriteAsync(
         string action,
         Func<Task<bool>> request,
@@ -1567,7 +2956,10 @@ public partial class MainWindow : Window
 
             var config = configJson.Deserialize<ConfigSnapshot>(ThrmIpcClient.JsonOptions)
                 ?? throw new JsonException("GetConfig response contained no configuration.");
-            ApplyConfig(config, configJson.TryGetProperty("timeCurveSchedule", out _));
+            ApplyConfig(
+                config,
+                configJson.TryGetProperty("timeCurveSchedule", out _),
+                configJson.TryGetProperty("rtss", out _));
             ApplyDeviceStatus(statusTask.Result);
             _configKnown = true;
             _deviceStateKnown = true;
@@ -1628,21 +3020,56 @@ public partial class MainWindow : Window
         });
     }
 
-    private void ApplyConfig(ConfigSnapshot config, bool timeCurveSchedulePropertyPresent)
+    private void ApplyConfig(
+        ConfigSnapshot config,
+        bool timeCurveSchedulePropertyPresent,
+        bool rtssPropertyPresent)
     {
         _updatingConfigControls = true;
         try
         {
             _autoControl = config.AutoControl;
+            _tempSource = NormalizeTempSource(config.TempSource);
+            _tempSampleCount = NormalizeTempSampleCount(config.TempSampleCount);
+            _selectedCpuSensors.Clear();
+            _selectedCpuSensors.UnionWith((config.CpuSensors ?? []).Where(sensor => !string.IsNullOrWhiteSpace(sensor)));
+            _selectedGpuDevice = NormalizeMonitoringSelection(config.GpuDevice);
+            _selectedGpuSensor = NormalizeMonitoringSelection(config.GpuSensor);
+            _disableGpuMonitoring = config.DisableGpuMonitoring;
+            _ignoreDeviceOnReconnect = config.IgnoreDeviceOnReconnect;
             _customSpeedEnabled = config.CustomSpeedEnabled;
             _customSpeedRpm = config.CustomSpeedRpm is >= 1000 and <= 4000 ? config.CustomSpeedRpm : 2000;
+            _manualGearRpm = config.ManualGearRpm ?? [];
+            _legionFnQ = NormalizeLegionFnQ(config.LegionFnQ);
+            _legionFnQSupported = config.LegionFnQSupport?.Supported == true;
             _gearLight = config.GearLight;
             _lightStrip = LightStripLogic.Normalize(config.LightStrip);
             _powerOnStart = config.PowerOnStart;
             _smartStartStop = SmartStartStopValues.Contains(config.SmartStartStop) ? config.SmartStartStop! : "off";
-            _fanCurveLearningEnabled = config.SmartControl?.Learning == true;
-            _fanCurveLearningBias = config.SmartControl?.LearningBias ?? "balanced";
+            _themeMode = NormalizeThemeMode(config.ThemeMode);
+            _debugMode = config.DebugMode;
+            _manualGearToggleHotkey = NormalizeHotkeyValue(config.ManualGearToggleHotkey);
+            _autoControlToggleHotkey = NormalizeHotkeyValue(config.AutoControlToggleHotkey);
+            _curveProfileToggleHotkey = NormalizeHotkeyValue(config.CurveProfileToggleHotkey);
+            _fanCurveLearningEnabled = config.SmartControl?.Learning ?? true;
+            _fanCurveLearningBias = NormalizeLearningBias(config.SmartControl?.LearningBias);
+            _fanCurvePredictiveBoost = config.SmartControl?.PredictiveBoost ?? true;
+            _fanCurveLaptopFanGuard = config.SmartControl?.LaptopFanGuard ?? true;
+            _fanCurveTargetTemp = config.SmartControl?.TargetTemp is >= 45 and <= 90
+                ? config.SmartControl.TargetTemp
+                : 68;
+            _speedAvoidance = NormalizeSpeedAvoidance(config.SpeedAvoidance);
             _timeCurveScheduleSupported = timeCurveSchedulePropertyPresent;
+            _rtssSupported = rtssPropertyPresent;
+            _rtssEnabled = config.Rtss?.Enabled == true;
+            _rtssUpdateIntervalMs = RtssUpdateIntervalOptions.Contains(config.Rtss?.UpdateIntervalMs ?? 0)
+                ? config.Rtss!.UpdateIntervalMs
+                : 1000;
+            _rtssPositionMode = string.Equals(config.Rtss?.PositionMode, "custom", StringComparison.Ordinal)
+                ? "custom"
+                : "anchor";
+            _rtssPositionX = Math.Clamp(config.Rtss?.PositionX ?? 0, -1000, 1000);
+            _rtssPositionY = Math.Clamp(config.Rtss?.PositionY ?? 0, -1000, 1000);
             if (config.TimeCurveSchedule is not null)
             {
                 _timeCurveSchedule = CloneTimeCurveSchedule(config.TimeCurveSchedule);
@@ -1660,6 +3087,7 @@ public partial class MainWindow : Window
             }
 
             AutoControlSwitch.IsChecked = _autoControl;
+            IgnoreDeviceOnReconnectSwitch.IsChecked = _ignoreDeviceOnReconnect;
             CustomSpeedSwitch.IsChecked = _customSpeedEnabled;
             CustomSpeedNumberBox.Value = _customSpeedRpm;
             GearLightSwitch.IsChecked = _gearLight;
@@ -1667,10 +3095,19 @@ public partial class MainWindow : Window
             SelectCoreValue(SmartStartStopComboBox, SmartStartStopValues, _smartStartStop);
             SelectCoreValue(ManualGearComboBox, ManualGearValues, _manualGear);
             SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
+            ApplyManualGearRpmControls();
+            ApplyLegionFnQControls();
+            ApplyCurveLearningControls();
+            ApplyTemperatureControlControls();
             ApplyLightStripControls();
-            UpdateManualAppliedText();
             UpdateFanCurvePreview();
             ApplyTimeCurveScheduleControls();
+            ApplySpeedAvoidanceControls();
+            ApplyMonitoringControls();
+            ApplyRtssControls();
+            ApplyThemeControls();
+            ApplyDiagnosticsControls();
+            ApplyHotkeyControls();
         }
         finally
         {
@@ -1708,11 +3145,12 @@ public partial class MainWindow : Window
             ApplyTemperature(status.Temperature);
         }
 
-        UpdateManualAppliedText();
     }
 
     private void ApplyTemperature(TemperatureSnapshot temperature)
     {
+        temperature = TemperatureSnapshot.MergeMetadata(_latestTemperature, temperature);
+        _latestTemperature = temperature;
         CpuTempText.Text = $"{temperature.CpuTemp} °C";
         GpuTempText.Text = $"{temperature.GpuTemp} °C";
         MaxTempText.Text = $"{temperature.MaxTemp} °C";
@@ -1720,6 +3158,545 @@ public partial class MainWindow : Window
             ? "Temperature bridge OK"
             : $"Temperature bridge: {EmptyDash(temperature.BridgeMessage)}";
         LastUpdateText.Text = $"Temperature update: {DateTime.Now:HH:mm:ss}";
+        ApplyMonitoringControls();
+        ApplyLaptopFanGuardPresentation();
+    }
+
+    private void ApplyMonitoringControls()
+    {
+        var wasUpdating = _updatingMonitoringControls;
+        _updatingMonitoringControls = true;
+        try
+        {
+            var cpuSensorFlyout = CpuSensorSelectionButton.Flyout as FAMenuFlyout
+                ?? throw new InvalidOperationException("CPU sensor selector flyout is unavailable.");
+            GpuMonitoringSwitch.IsChecked = !_disableGpuMonitoring;
+
+            var cpuOptions = BuildMonitoringOptions(_latestTemperature?.CpuSensors);
+            if (!_renderedCpuSensorOptions.SequenceEqual(cpuOptions))
+            {
+                cpuSensorFlyout.Items.Clear();
+                var automatic = new FAToggleMenuFlyoutItem
+                {
+                    Text = "Automatic (recommended)",
+                    Tag = CpuSensorAutomaticTag,
+                };
+                AutomationProperties.SetName(automatic, "Use automatic CPU temperature sensor selection");
+                automatic.Click += CpuSensorSelectionClick;
+                cpuSensorFlyout.Items.Add(automatic);
+                cpuSensorFlyout.Items.Add(new FAMenuFlyoutSeparator());
+                foreach (var option in cpuOptions)
+                {
+                    var item = new FAToggleMenuFlyoutItem
+                    {
+                        Text = option.Label,
+                        Tag = option.Key,
+                        IsChecked = _selectedCpuSensors.Contains(option.Key),
+                    };
+                    AutomationProperties.SetName(item, $"Use CPU temperature sensor {option.Label}");
+                    item.Click += CpuSensorSelectionClick;
+                    cpuSensorFlyout.Items.Add(item);
+                }
+
+                _renderedCpuSensorOptions = cpuOptions;
+            }
+
+            var selectedCpuSensors = _cpuSensorSelectionFlyoutOpen
+                ? _cpuSensorSelectionDraft
+                : _selectedCpuSensors;
+            foreach (var item in cpuSensorFlyout.Items.OfType<FAToggleMenuFlyoutItem>())
+            {
+                item.IsChecked = ReferenceEquals(item.Tag, CpuSensorAutomaticTag)
+                    ? selectedCpuSensors.Count == 0
+                    : item.Tag is string key && selectedCpuSensors.Contains(key);
+            }
+
+            var selectedCpuSensorCount = cpuOptions.Count(option => selectedCpuSensors.Contains(option.Key));
+            CpuSensorSelectionText.Text = selectedCpuSensorCount switch
+            {
+                0 => "Automatic (recommended)",
+                1 => cpuOptions.First(option => selectedCpuSensors.Contains(option.Key)).Label,
+                _ => $"{selectedCpuSensorCount} sensors selected",
+            };
+
+            var gpuDeviceOptions = BuildGpuDeviceOptions(_latestTemperature?.GpuDevices);
+            if (!_renderedGpuDeviceOptions.SequenceEqual(gpuDeviceOptions))
+            {
+                _renderedGpuDeviceOptions = gpuDeviceOptions;
+                GpuDeviceComboBox.ItemsSource = gpuDeviceOptions;
+            }
+
+            SetSelectedMonitoringOption(GpuDeviceComboBox, gpuDeviceOptions, _selectedGpuDevice);
+
+            var gpuSensorOptions = BuildGpuSensorOptions();
+            if (!_renderedGpuSensorOptions.SequenceEqual(gpuSensorOptions))
+            {
+                _renderedGpuSensorOptions = gpuSensorOptions;
+                GpuSensorComboBox.ItemsSource = gpuSensorOptions;
+            }
+
+            SetSelectedMonitoringOption(GpuSensorComboBox, gpuSensorOptions, _selectedGpuSensor);
+        }
+        finally
+        {
+            _updatingMonitoringControls = wasUpdating;
+        }
+
+        SetActionAvailability();
+    }
+
+    private MonitoringSelectionOption[] BuildGpuSensorOptions() =>
+        BuildMonitoringOptions(EffectiveGpuSensors(), includeAutomatic: true);
+
+    private IReadOnlyList<TemperatureSensorSnapshot> EffectiveGpuSensors()
+    {
+        var selectedDevice = (_latestTemperature?.GpuDevices ?? []).FirstOrDefault(device =>
+            string.Equals(device.Key, _selectedGpuDevice, StringComparison.Ordinal));
+        return selectedDevice is { Sensors.Count: > 0 }
+            ? selectedDevice.Sensors
+            : _latestTemperature?.GpuSensors ?? [];
+    }
+
+    private static MonitoringSelectionOption[] BuildGpuDeviceOptions(
+        IEnumerable<TemperatureGpuDeviceSnapshot>? devices)
+    {
+        var options = new List<MonitoringSelectionOption>
+        {
+            new("auto", "Automatic (recommended)"),
+        };
+        options.AddRange((devices ?? [])
+            .Where(device => !string.IsNullOrWhiteSpace(device.Key))
+            .GroupBy(device => device.Key, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .Select(device => new MonitoringSelectionOption(device.Key, MonitoringOptionLabel(device.Name, device.Key))));
+        return options.ToArray();
+    }
+
+    private static MonitoringSelectionOption[] BuildMonitoringOptions(
+        IEnumerable<TemperatureSensorSnapshot>? sensors,
+        bool includeAutomatic = false)
+    {
+        var options = new List<MonitoringSelectionOption>();
+        if (includeAutomatic)
+        {
+            options.Add(new MonitoringSelectionOption("auto", "Automatic (recommended)"));
+        }
+
+        options.AddRange((sensors ?? [])
+            .Where(sensor => !string.IsNullOrWhiteSpace(sensor.Key))
+            .GroupBy(sensor => sensor.Key, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .Select(sensor => new MonitoringSelectionOption(sensor.Key, MonitoringOptionLabel(sensor.Name, sensor.Key))));
+        return options.ToArray();
+    }
+
+    private static string MonitoringOptionLabel(string? name, string key) =>
+        string.IsNullOrWhiteSpace(name) ? key : name;
+
+    private static string NormalizeMonitoringSelection(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "auto" : value;
+
+    private static void SetSelectedMonitoringOption(
+        FAComboBox comboBox,
+        IReadOnlyList<MonitoringSelectionOption> options,
+        string selectedKey)
+    {
+        var selected = options.FirstOrDefault(option =>
+            string.Equals(option.Key, selectedKey, StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(selected.Key))
+        {
+            selected = options.FirstOrDefault(option => string.Equals(option.Key, "auto", StringComparison.Ordinal));
+        }
+
+        if (!Equals(comboBox.SelectedItem, selected))
+        {
+            comboBox.SelectedItem = selected;
+        }
+    }
+
+    private void ApplyRtssControls()
+    {
+        var wasUpdating = _updatingRtssControls;
+        _updatingRtssControls = true;
+        try
+        {
+            RtssEnabledSwitch.IsChecked = _rtssEnabled;
+            RtssIntervalComboBox.SelectedIndex = Array.IndexOf(RtssUpdateIntervalOptions, _rtssUpdateIntervalMs);
+            RtssPositionModeComboBox.SelectedIndex = _rtssPositionMode == "custom" ? 1 : 0;
+            RtssPositionXNumberBox.Value = _rtssPositionX;
+            RtssPositionYNumberBox.Value = _rtssPositionY;
+            RtssAnchorPositionSetting.IsVisible = _rtssSupported && _rtssPositionMode == "anchor";
+            RtssCustomPositionSetting.IsVisible = _rtssSupported && _rtssPositionMode == "custom";
+            RtssUnavailableSetting.IsVisible = !_rtssSupported;
+            RtssUnavailableInfoBar.IsOpen = !_rtssSupported;
+            RtssPositionStatusText.Text = _rtssPositionMode == "custom"
+                ? $"Current custom offset: X {_rtssPositionX}, Y {_rtssPositionY}. Preview does not save changes."
+                : "RTSS OverlayEditor controls the current position.";
+            RtssAnchorStatusText.Text = DescribeRtssAnchorStatus();
+        }
+        finally
+        {
+            _updatingRtssControls = wasUpdating;
+        }
+
+        SetActionAvailability();
+    }
+
+    private void ApplyThemeControls()
+    {
+        var wasUpdating = _updatingThemeControls;
+        _updatingThemeControls = true;
+        try
+        {
+            SelectCoreValue(ThemeModeComboBox, ThemeModeValues, _themeMode);
+            if (Application.Current is { } application)
+            {
+                application.RequestedThemeVariant = _themeMode switch
+                {
+                    "light" => ThemeVariant.Light,
+                    "dark" => ThemeVariant.Dark,
+                    _ => ThemeVariant.Default,
+                };
+            }
+        }
+        finally
+        {
+            _updatingThemeControls = wasUpdating;
+        }
+    }
+
+    private void ApplyDiagnosticsControls() => DebugModeSwitch.IsChecked = _debugMode;
+
+    private void ApplyHotkeyControls()
+    {
+        var wasUpdating = _updatingHotkeyControls;
+        _updatingHotkeyControls = true;
+        try
+        {
+            ManualGearHotkeyTextBox.Text = _manualGearToggleHotkey;
+            AutoControlHotkeyTextBox.Text = _autoControlToggleHotkey;
+            CurveProfileHotkeyTextBox.Text = _curveProfileToggleHotkey;
+        }
+        finally
+        {
+            _updatingHotkeyControls = wasUpdating;
+        }
+    }
+
+    private void ApplyManualGearRpmControls()
+    {
+        var wasUpdating = _updatingManualGearRpmControls;
+        _updatingManualGearRpmControls = true;
+        try
+        {
+            _manualGearRpmGear = SelectedCoreValue(ManualGearComboBox, ManualGearValues)
+                ?? (ManualGearValues.Contains(_manualGear) ? _manualGear! : "标准");
+            _manualGearRpmLevel = IsBs1
+                ? "中"
+                : SelectedCoreValue(ManualLevelComboBox, ManualLevelValues)
+                    ?? (ManualLevelValues.Contains(_manualLevel) ? _manualLevel! : "中");
+            ManualGearRpmNumberBox.Value = GetManualGearRpm(_manualGearRpmGear, _manualGearRpmLevel);
+        }
+        finally
+        {
+            _updatingManualGearRpmControls = wasUpdating;
+        }
+
+    }
+
+    private int GetManualGearRpm(string gear, string level) => ResolveManualGearRpm(_manualGearRpm, gear, level);
+
+    private static int ResolveManualGearRpm(
+        IReadOnlyDictionary<string, Dictionary<string, int>>? values,
+        string gear,
+        string level) =>
+        values is not null
+        && values.TryGetValue(gear, out var levels)
+        && levels is not null
+        && levels.TryGetValue(level, out var rpm)
+        && rpm is >= 800 and <= 4500
+            ? rpm
+            : DefaultManualGearRpm(gear, level);
+
+    private static int DefaultManualGearRpm(string gear, string level) => (gear, level) switch
+    {
+        ("静音", "低") => 1300,
+        ("静音", "中") => 1700,
+        ("静音", "高") => 1900,
+        ("标准", "低") => 2100,
+        ("标准", "中") => 2400,
+        ("标准", "高") => 2700,
+        ("强劲", "低") => 2800,
+        ("强劲", "中") => 3000,
+        ("强劲", "高") => 3300,
+        ("超频", "低") => 3500,
+        ("超频", "中") => 3700,
+        ("超频", "高") => 4000,
+        _ => 2400,
+    };
+
+    private void ApplyLegionFnQControls()
+    {
+        var wasUpdating = _updatingLegionFnQControls;
+        _updatingLegionFnQControls = true;
+        try
+        {
+            LegionFnQExpander.IsVisible = _legionFnQSupported;
+            LegionFnQEnabledSwitch.IsChecked = _legionFnQ.Enabled;
+            LegionFnQTakeOverFanSwitch.IsChecked = _legionFnQ.TakeOverFan;
+            ApplyLegionFnQMapping("Quiet", LegionFnQQuietGearComboBox, LegionFnQQuietLevelComboBox);
+            ApplyLegionFnQMapping("Balance", LegionFnQBalanceGearComboBox, LegionFnQBalanceLevelComboBox);
+            ApplyLegionFnQMapping("Performance", LegionFnQPerformanceGearComboBox, LegionFnQPerformanceLevelComboBox);
+            ApplyLegionFnQMapping("Extreme", LegionFnQExtremeGearComboBox, LegionFnQExtremeLevelComboBox);
+            ApplyLegionFnQMapping("GodMode", LegionFnQGodModeGearComboBox, LegionFnQGodModeLevelComboBox);
+        }
+        finally
+        {
+            _updatingLegionFnQControls = wasUpdating;
+        }
+    }
+
+    private void ApplyLegionFnQMapping(string mode, FAComboBox gearComboBox, FAComboBox levelComboBox)
+    {
+        var target = GetLegionFnQTarget(mode);
+        SelectCoreValue(gearComboBox, ManualGearValues, target.Gear);
+        SelectCoreValue(levelComboBox, ManualLevelValues, target.Level);
+    }
+
+    private FanGearTargetSnapshot GetLegionFnQTarget(string mode) =>
+        _legionFnQ.ModeMapping.TryGetValue(mode, out var target)
+            ? target
+            : DefaultLegionFnQTarget(mode);
+
+    internal static LegionFnQConfigSnapshot NormalizeLegionFnQ(LegionFnQConfigSnapshot? value)
+    {
+        var modeMapping = new Dictionary<string, FanGearTargetSnapshot>();
+        foreach (var mode in LegionFnQPowerModeValues)
+        {
+            var fallback = DefaultLegionFnQTarget(mode);
+            var target = value is not null && value.ModeMapping.TryGetValue(mode, out var configured)
+                ? configured
+                : null;
+            modeMapping[mode] = new FanGearTargetSnapshot
+            {
+                Gear = ManualGearValues.Contains(target?.Gear ?? string.Empty) ? target!.Gear : fallback.Gear,
+                Level = ManualLevelValues.Contains(target?.Level ?? string.Empty) ? target!.Level : fallback.Level,
+            };
+        }
+
+        return new LegionFnQConfigSnapshot
+        {
+            Enabled = value?.Enabled == true,
+            TakeOverFan = value?.TakeOverFan == true,
+            ModeMapping = modeMapping,
+        };
+    }
+
+    private static FanGearTargetSnapshot DefaultLegionFnQTarget(string mode) => mode switch
+    {
+        "Quiet" => new FanGearTargetSnapshot { Gear = "静音", Level = "中" },
+        "Balance" => new FanGearTargetSnapshot { Gear = "标准", Level = "中" },
+        "Performance" => new FanGearTargetSnapshot { Gear = "强劲", Level = "中" },
+        "Extreme" => new FanGearTargetSnapshot { Gear = "超频", Level = "中" },
+        "GodMode" => new FanGearTargetSnapshot { Gear = "超频", Level = "高" },
+        _ => new FanGearTargetSnapshot { Gear = "标准", Level = "中" },
+    };
+
+    private void ApplyCurveLearningControls()
+    {
+        var wasUpdating = _updatingCurveLearningControls;
+        _updatingCurveLearningControls = true;
+        try
+        {
+            FanCurveLearningEnabledSwitch.IsChecked = _fanCurveLearningEnabled;
+            SelectCoreValue(FanCurveLearningBiasComboBox, LearningBiasValues, _fanCurveLearningBias);
+            FanCurvePredictiveBoostSwitch.IsChecked = _fanCurvePredictiveBoost;
+            FanCurveLaptopFanGuardSwitch.IsChecked = _fanCurveLaptopFanGuard;
+            ApplyLaptopFanGuardPresentation();
+            FanCurveTargetTempNumberBox.Value = _fanCurveTargetTemp;
+        }
+        finally
+        {
+            _updatingCurveLearningControls = wasUpdating;
+        }
+    }
+
+    private bool HasLaptopFanTelemetry => _latestTemperature is { CpuFanRpm: > 0 } or { GpuFanRpm: > 0 };
+
+    private void ApplyLaptopFanGuardPresentation()
+    {
+        FanCurveLaptopFanGuardSetting.IsVisible = HasLaptopFanTelemetry;
+        FanCurveLaptopFanGuardSwitch.IsEnabled = CanChangeCurveLearning()
+            && _fanCurveLearningEnabled
+            && HasLaptopFanTelemetry;
+    }
+
+    private void ApplyTemperatureControlControls()
+    {
+        var wasUpdating = _updatingTemperatureControlControls;
+        _updatingTemperatureControlControls = true;
+        try
+        {
+            SelectCoreValue(TempSourceComboBox, TemperatureSourceValues, _tempSource);
+            TempSampleCountComboBox.SelectedIndex = Array.IndexOf(TemperatureSampleCountValues, _tempSampleCount);
+        }
+        finally
+        {
+            _updatingTemperatureControlControls = wasUpdating;
+        }
+    }
+
+    private static string NormalizeThemeMode(string? value) => value switch
+    {
+        "light" => "light",
+        "dark" => "dark",
+        _ => "system",
+    };
+
+    private static string NormalizeTempSource(string? value) => value is "cpu" or "gpu" ? value : "max";
+
+    private static string NormalizeLearningBias(string? value) =>
+        LearningBiasValues.Contains(value) ? value! : "balanced";
+
+    private static int NormalizeTempSampleCount(int value) =>
+        TemperatureSampleCountValues.Contains(value) ? value : TemperatureSampleCountValues[0];
+
+    private static string NormalizeHotkeyValue(string? value) => value?.Trim() ?? string.Empty;
+
+    private bool CanChangeRtss() =>
+        _ipc.IsConnected
+        && _configKnown
+        && _rtssSupported
+        && !_writeInProgress;
+
+    private async Task RefreshRtssAnchorAsync()
+    {
+        if (_rtssAnchorBusy)
+        {
+            return;
+        }
+
+        _rtssAnchorBusy = true;
+        _rtssAnchorError = null;
+        ApplyRtssControls();
+        try
+        {
+            _rtssAnchorLayout = await Task.Run(RtssOverlayLayout.Inspect, _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // The window is closing.
+        }
+        catch (Exception ex)
+        {
+            _rtssAnchorError = ex.Message;
+            SetActivity($"RTSS layout inspection failed: {ex.Message}", FAInfoBarSeverity.Error);
+        }
+        finally
+        {
+            _rtssAnchorBusy = false;
+            ApplyRtssControls();
+        }
+    }
+
+    private string DescribeRtssAnchorStatus()
+    {
+        if (_rtssAnchorBusy)
+        {
+            return "Checking the active RTSS layout...";
+        }
+
+        if (!string.IsNullOrWhiteSpace(_rtssAnchorError))
+        {
+            return $"Could not inspect the RTSS layout: {_rtssAnchorError}";
+        }
+
+        var layout = _rtssAnchorLayout;
+        if (layout is null)
+        {
+            return "Select Refresh to inspect the active RTSS layout.";
+        }
+
+        if (!layout.Supported)
+        {
+            return "RTSS OverlayEditor anchoring is available on Windows only.";
+        }
+
+        if (!layout.Installed)
+        {
+            return "RTSS was not found. Install RTSS, then select Refresh.";
+        }
+
+        if (string.IsNullOrWhiteSpace(layout.LayoutPath))
+        {
+            return "RTSS is installed, but its active OverlayEditor layout could not be read.";
+        }
+
+        return layout.AnchorState switch
+        {
+            "confirmed" => $"Ready: THRM anchor is the last layer ({layout.AnchorIndex + 1} of {layout.LayerCount}).",
+            "candidate" => "An empty one-percent layer is ready to use. Select Set up anchor to mark it for THRM.",
+            "needs_last" => "An anchor layer needs to be moved to the bottom. Select Set up anchor to fix it.",
+            _ => "No THRM anchor exists yet. Select Set up anchor to add one at the bottom.",
+        };
+    }
+
+    private Task<bool> PatchRtssConfigAsync(Action<JsonObject> patch) =>
+        PatchConfigAsync(root =>
+        {
+            if (root["rtss"] is not JsonObject rtss)
+            {
+                rtss = new JsonObject
+                {
+                    ["enabled"] = _rtssEnabled,
+                    ["updateIntervalMs"] = _rtssUpdateIntervalMs,
+                    ["positionMode"] = _rtssPositionMode,
+                    ["positionX"] = _rtssPositionX,
+                    ["positionY"] = _rtssPositionY,
+                };
+                root["rtss"] = rtss;
+            }
+
+            patch(rtss);
+        });
+
+    private void ApplySpeedAvoidanceControls()
+    {
+        var wasUpdating = _updatingSpeedAvoidanceControls;
+        _updatingSpeedAvoidanceControls = true;
+        try
+        {
+            SpeedAvoidanceEnabledSwitch.IsChecked = _speedAvoidance.Enabled;
+            SpeedAvoidanceMinRpmNumberBox.Value = _speedAvoidance.MinRpm;
+            SpeedAvoidanceMaxRpmNumberBox.Value = _speedAvoidance.MaxRpm;
+            SpeedAvoidanceMarginRpmNumberBox.Value = _speedAvoidance.MarginRpm;
+            SpeedAvoidanceBypassTempNumberBox.Value = _speedAvoidance.EmergencyBypassTemp;
+        }
+        finally
+        {
+            _updatingSpeedAvoidanceControls = wasUpdating;
+        }
+
+    }
+
+    private static SpeedAvoidanceSnapshot NormalizeSpeedAvoidance(SpeedAvoidanceSnapshot? value)
+    {
+        var minRpm = value?.MinRpm is >= 800 and <= 4500 ? value.MinRpm : 1900;
+        var maxRpm = value?.MaxRpm is >= 800 and <= 4500 ? value.MaxRpm : 2200;
+        if (minRpm >= maxRpm)
+        {
+            minRpm = 1900;
+            maxRpm = 2200;
+        }
+
+        return new SpeedAvoidanceSnapshot
+        {
+            Enabled = value?.Enabled == true,
+            MinRpm = minRpm,
+            MaxRpm = maxRpm,
+            MarginRpm = value?.MarginRpm is >= 50 and <= 500 ? value.MarginRpm : 100,
+            EmergencyBypassTemp = value?.EmergencyBypassTemp is >= 60 and <= 95 ? value.EmergencyBypassTemp : 80,
+        };
     }
 
     private void ApplyFanData(FanDataSnapshot fanData)
@@ -1737,20 +3714,36 @@ public partial class MainWindow : Window
         AutoControlSwitch.IsEnabled = _ipc.IsConnected && _configKnown && !_writeInProgress && !_customSpeedEnabled;
 
         var canChangeManual = CanChangeManualControl();
+        ManualFanControlExpander.IsVisible = _ipc.IsConnected
+            && _deviceStateKnown
+            && _configKnown
+            && _deviceConnected
+            && !_autoControl
+            && !_customSpeedEnabled;
         ManualGearComboBox.IsEnabled = canChangeManual;
         ManualLevelSetting.IsVisible = !IsBs1;
         ManualLevelComboBox.IsEnabled = canChangeManual && !IsBs1;
-        ManualLevelInfo.IsVisible = IsBs1;
+        ManualGearRpmSetting.IsVisible = !IsBs1;
+        ManualGearRpmNumberBox.IsEnabled = canChangeManual && !IsBs1;
         ApplyManualGearButton.IsEnabled = canChangeManual
             && SelectedCoreValue(ManualGearComboBox, ManualGearValues) is not null
             && (IsBs1 || SelectedCoreValue(ManualLevelComboBox, ManualLevelValues) is not null);
-        ManualControlAvailabilityText.Text = GetManualControlAvailabilityText(canChangeManual);
+
+        var canChangeLegionFnQ = CanChangeLegionFnQ();
+        var canChangeLegionFnQMapping = canChangeLegionFnQ && _legionFnQ.Enabled && _legionFnQ.TakeOverFan;
+        LegionFnQExpander.IsVisible = _legionFnQSupported;
+        LegionFnQEnabledSwitch.IsEnabled = canChangeLegionFnQ;
+        LegionFnQTakeOverFanSwitch.IsEnabled = canChangeLegionFnQ && _legionFnQ.Enabled;
+        LegionFnQQuietMappingSetting.IsEnabled = canChangeLegionFnQMapping;
+        LegionFnQBalanceMappingSetting.IsEnabled = canChangeLegionFnQMapping;
+        LegionFnQPerformanceMappingSetting.IsEnabled = canChangeLegionFnQMapping;
+        LegionFnQExtremeMappingSetting.IsEnabled = canChangeLegionFnQMapping;
+        LegionFnQGodModeMappingSetting.IsEnabled = canChangeLegionFnQMapping;
 
         var canChangeCustomSpeed = CanChangeCustomSpeed();
         CustomSpeedSwitch.IsEnabled = canChangeCustomSpeed;
         CustomSpeedNumberBox.IsEnabled = canChangeCustomSpeed && _customSpeedEnabled;
         ApplyCustomSpeedButton.IsEnabled = canChangeCustomSpeed && _customSpeedEnabled;
-        CustomSpeedStatusText.Text = GetCustomSpeedAvailabilityText(canChangeCustomSpeed);
 
         var canChangeDeviceFeatures = CanChangeDeviceFeatures();
         var canChangeLighting = canChangeDeviceFeatures && !IsBs1;
@@ -1765,12 +3758,42 @@ public partial class MainWindow : Window
         LightColorPicker2.IsEnabled = canChangeLighting;
         ApplyLightStripButton.IsEnabled = canChangeLighting;
         SystemAutoStartSwitch.IsEnabled = CanChangeSystemAutoStart();
+        var canChangeMonitoring = CanChangeMonitoringSources();
+        IgnoreDeviceOnReconnectSwitch.IsEnabled = canChangeMonitoring;
+        TempSourceComboBox.IsEnabled = canChangeMonitoring;
+        TempSampleCountComboBox.IsEnabled = canChangeMonitoring && _autoControl;
+        CpuSensorSelectionButton.IsEnabled = canChangeMonitoring && _renderedCpuSensorOptions.Length > 0;
+        GpuMonitoringSwitch.IsEnabled = canChangeMonitoring;
+        GpuDeviceComboBox.IsEnabled = canChangeMonitoring
+            && !_disableGpuMonitoring
+            && _renderedGpuDeviceOptions.Length > 1;
+        GpuSensorComboBox.IsEnabled = canChangeMonitoring
+            && !_disableGpuMonitoring
+            && _renderedGpuSensorOptions.Length > 1;
+        var canChangeRtss = CanChangeRtss();
+        RtssEnabledSwitch.IsEnabled = canChangeRtss;
+        RtssIntervalComboBox.IsEnabled = canChangeRtss && _rtssEnabled;
+        RtssPositionModeComboBox.IsEnabled = canChangeRtss;
+        RtssPositionXNumberBox.IsEnabled = canChangeRtss && _rtssPositionMode == "custom";
+        RtssPositionYNumberBox.IsEnabled = canChangeRtss && _rtssPositionMode == "custom";
+        RtssPreviewPositionButton.IsEnabled = canChangeRtss
+            && _rtssPositionMode == "custom"
+            && !_rtssPreviewInProgress;
+        RtssApplyPositionButton.IsEnabled = canChangeRtss && _rtssPositionMode == "custom";
+        RefreshRtssAnchorButton.IsEnabled = _rtssSupported
+            && _rtssPositionMode == "anchor"
+            && !_rtssAnchorBusy;
+        CreateRtssAnchorButton.IsEnabled = _rtssSupported
+            && _rtssPositionMode == "anchor"
+            && !_rtssAnchorBusy
+            && _rtssAnchorLayout is { Supported: true, Installed: true }
+            && !string.IsNullOrWhiteSpace(_rtssAnchorLayout.LayoutPath)
+            && !string.Equals(_rtssAnchorLayout.AnchorState, "confirmed", StringComparison.Ordinal);
         GearLightDeviceSetting.IsVisible = !IsBs1;
         GearLightSwitch.IsEnabled = canChangeDeviceFeatures && !IsBs1;
         PowerOnStartSwitch.IsEnabled = canChangeDeviceFeatures;
         SmartStartStopDeviceSetting.IsVisible = !IsBs1;
         SmartStartStopComboBox.IsEnabled = canChangeDeviceFeatures && !IsBs1;
-        DeviceFeaturesStatusText.Text = GetDeviceFeaturesAvailabilityText(canChangeDeviceFeatures);
 
         var canEditFanCurve = CanEditFanCurve;
         var activeFanCurveProfile = ActiveFanCurveProfile();
@@ -1786,6 +3809,21 @@ public partial class MainWindow : Window
         ResetLearnedOffsetsButton.IsEnabled = canEditFanCurve;
         ApplyFanCurveButton.IsEnabled = canEditFanCurve && _fanCurve.Count >= 2;
         FanCurvePreview.IsEditable = canEditFanCurve;
+        var canChangeCurveLearning = CanChangeCurveLearning();
+        FanCurveLearningEnabledSwitch.IsEnabled = canChangeCurveLearning;
+        FanCurveLearningBiasComboBox.IsEnabled = canChangeCurveLearning;
+        FanCurvePredictiveBoostSwitch.IsEnabled = canChangeCurveLearning && _fanCurveLearningEnabled;
+        FanCurveLaptopFanGuardSwitch.IsEnabled = canChangeCurveLearning
+            && _fanCurveLearningEnabled
+            && HasLaptopFanTelemetry;
+        FanCurveTargetTempNumberBox.IsEnabled = canChangeCurveLearning;
+        ApplyFanCurveTargetTempButton.IsEnabled = canChangeCurveLearning;
+        var canChangeSpeedAvoidance = CanChangeMonitoringSources();
+        SpeedAvoidanceEnabledSwitch.IsEnabled = canChangeSpeedAvoidance;
+        SpeedAvoidanceMinRpmNumberBox.IsEnabled = canChangeSpeedAvoidance;
+        SpeedAvoidanceMaxRpmNumberBox.IsEnabled = canChangeSpeedAvoidance;
+        SpeedAvoidanceMarginRpmNumberBox.IsEnabled = canChangeSpeedAvoidance;
+        SpeedAvoidanceBypassTempNumberBox.IsEnabled = canChangeSpeedAvoidance;
         var canEditTimeCurveSchedule = canEditFanCurve && _timeCurveScheduleSupported;
         TimeCurveScheduleEnabledSwitch.IsEnabled = canEditTimeCurveSchedule;
         AddTimeCurveScheduleRuleButton.IsEnabled = canEditTimeCurveSchedule && _fanCurveProfiles.Count > 0;
@@ -1797,6 +3835,18 @@ public partial class MainWindow : Window
             && !_writeInProgress;
         TemperatureHistoryEnabledSwitch.IsEnabled = canManageTemperatureHistory;
         TemperatureHistoryRetentionComboBox.IsEnabled = canManageTemperatureHistory;
+        ThemeModeComboBox.IsEnabled = CanChangeTheme();
+        DebugModeSwitch.IsEnabled = CanChangeDiagnostics();
+        RefreshDiagnosticsButton.IsEnabled = _ipc.IsConnected && !_diagnosticsLoading && !_diagnosticsExporting && !_writeInProgress;
+        ExportDiagnosticsButton.IsEnabled = CanExportDiagnostics();
+        var canSendDeviceDebugCommand = CanSendDeviceDebugCommand();
+        DeviceDebugExpander.IsEnabled = true;
+        DeviceDebugCommandTextBox.IsEnabled = canSendDeviceDebugCommand;
+        SendDeviceDebugCommandButton.IsEnabled = canSendDeviceDebugCommand;
+        var canChangeHotkeys = CanChangeHotkeys();
+        ManualGearHotkeyTextBox.IsEnabled = canChangeHotkeys;
+        AutoControlHotkeyTextBox.IsEnabled = canChangeHotkeys;
+        CurveProfileHotkeyTextBox.IsEnabled = canChangeHotkeys;
     }
 
     private async Task RefreshFanCurveAsync()
@@ -2736,6 +4786,9 @@ public partial class MainWindow : Window
     private bool CanEditFanCurve =>
         _ipc.IsConnected && _fanCurveKnown && !_fanCurveLoading && !_writeInProgress;
 
+    private bool CanChangeCurveLearning() =>
+        _ipc.IsConnected && _configKnown && !_writeInProgress;
+
     private FanCurveProfileSnapshot? ActiveFanCurveProfile() =>
         _fanCurveProfiles.FirstOrDefault(profile =>
             string.Equals(profile.Id, _activeFanCurveProfileId, StringComparison.Ordinal));
@@ -2862,6 +4915,12 @@ public partial class MainWindow : Window
         && !_autoControl
         && !_customSpeedEnabled;
 
+    private bool CanChangeLegionFnQ() =>
+        _ipc.IsConnected
+        && _configKnown
+        && _legionFnQSupported
+        && !_writeInProgress;
+
     private bool CanChangeDeviceFeatures() =>
         _ipc.IsConnected
         && _deviceStateKnown
@@ -2869,7 +4928,132 @@ public partial class MainWindow : Window
         && _deviceConnected
         && !_writeInProgress;
 
+    private bool CanChangeTheme() =>
+        _ipc.IsConnected
+        && _configKnown
+        && !_writeInProgress;
+
+    private bool CanChangeDiagnostics() => CanChangeTheme() && !_diagnosticsExporting;
+
+    private bool CanExportDiagnostics() =>
+        _ipc.IsConnected
+        && !_diagnosticsLoading
+        && !_diagnosticsExporting
+        && !_writeInProgress;
+
+    private bool CanSendDeviceDebugCommand() =>
+        _ipc.IsConnected
+        && _deviceStateKnown
+        && _configKnown
+        && _deviceConnected
+        && _debugMode
+        && !_diagnosticsLoading
+        && !_diagnosticsExporting
+        && !_deviceDebugCommandInProgress
+        && !_writeInProgress;
+
+    private bool CanChangeHotkeys() =>
+        _ipc.IsConnected
+        && _configKnown
+        && !_writeInProgress;
+
     private bool CanChangeCustomSpeed() => CanChangeDeviceFeatures();
+
+    private bool TryReadSpeedAvoidance(out SpeedAvoidanceSnapshot avoidance, out string error) =>
+        TryCreateSpeedAvoidance(
+            _speedAvoidance.Enabled,
+            SpeedAvoidanceMinRpmNumberBox.Value,
+            SpeedAvoidanceMaxRpmNumberBox.Value,
+            SpeedAvoidanceMarginRpmNumberBox.Value,
+            SpeedAvoidanceBypassTempNumberBox.Value,
+            out avoidance,
+            out error);
+
+    internal static bool TryCreateSpeedAvoidance(
+        bool enabled,
+        double minRpmValue,
+        double maxRpmValue,
+        double marginRpmValue,
+        double bypassTempValue,
+        out SpeedAvoidanceSnapshot avoidance,
+        out string error)
+    {
+        avoidance = new SpeedAvoidanceSnapshot();
+        if (!double.IsFinite(minRpmValue)
+            || !double.IsFinite(maxRpmValue)
+            || !double.IsFinite(marginRpmValue)
+            || !double.IsFinite(bypassTempValue)
+            || minRpmValue != Math.Truncate(minRpmValue)
+            || maxRpmValue != Math.Truncate(maxRpmValue)
+            || marginRpmValue != Math.Truncate(marginRpmValue)
+            || bypassTempValue != Math.Truncate(bypassTempValue))
+        {
+            error = "Speed avoidance values must be whole numbers.";
+            return false;
+        }
+
+        var minRpm = (int)minRpmValue;
+        var maxRpm = (int)maxRpmValue;
+        var marginRpm = (int)marginRpmValue;
+        var bypassTemp = (int)bypassTempValue;
+        if (minRpm is < 800 or > 4500 || maxRpm is < 800 or > 4500)
+        {
+            error = "Avoided speeds must be between 800 and 4,500 RPM.";
+            return false;
+        }
+
+        if (minRpm >= maxRpm)
+        {
+            error = "The minimum avoided speed must be lower than the maximum speed.";
+            return false;
+        }
+
+        if (marginRpm is < 50 or > 500)
+        {
+            error = "The safety margin must be between 50 and 500 RPM.";
+            return false;
+        }
+
+        if (bypassTemp is < 60 or > 95)
+        {
+            error = "The emergency bypass temperature must be between 60 and 95 °C.";
+            return false;
+        }
+
+        avoidance = new SpeedAvoidanceSnapshot
+        {
+            Enabled = enabled,
+            MinRpm = minRpm,
+            MaxRpm = maxRpm,
+            MarginRpm = marginRpm,
+            EmergencyBypassTemp = bypassTemp,
+        };
+        error = string.Empty;
+        return true;
+    }
+
+    private bool TryReadRtssPosition(out int x, out int y, out string error)
+    {
+        var xValue = RtssPositionXNumberBox.Value;
+        var yValue = RtssPositionYNumberBox.Value;
+        if (!double.IsFinite(xValue)
+            || !double.IsFinite(yValue)
+            || xValue != Math.Truncate(xValue)
+            || yValue != Math.Truncate(yValue)
+            || xValue is < -1000 or > 1000
+            || yValue is < -1000 or > 1000)
+        {
+            x = 0;
+            y = 0;
+            error = "RTSS offsets must be whole numbers from -1,000 to 1,000.";
+            return false;
+        }
+
+        x = (int)xValue;
+        y = (int)yValue;
+        error = string.Empty;
+        return true;
+    }
 
     private bool TryReadCustomSpeed(out int rpm, out string error)
     {
@@ -2886,101 +5070,51 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private string GetCustomSpeedAvailabilityText(bool canChangeCustomSpeed)
+    private bool TryReadManualGearRpm(string gear, string level, out int rpm, out string error)
     {
-        if (!_ipc.IsConnected)
+        var value = ManualGearRpmNumberBox.Value;
+        if (!double.IsFinite(value) || value != Math.Truncate(value) || value is < 800 or > 4500)
         {
-            return "Custom speed unavailable: THRM Core is not connected.";
+            rpm = 0;
+            error = "Manual preset speed must be a whole number from 800 to 4,500 RPM.";
+            return false;
         }
 
-        if (!_deviceStateKnown || !_configKnown)
+        rpm = (int)value;
+        if (!IsManualGearRpmOrderValid(_manualGearRpm, gear, level, rpm))
         {
-            return "Custom speed unavailable: waiting for synchronized device and configuration state.";
+            error = "Manual preset speeds must not decrease from Quiet Low through Overclock High.";
+            return false;
         }
 
-        if (!_deviceConnected)
-        {
-            return "Custom speed unavailable: connect a device first.";
-        }
-
-        if (_writeInProgress)
-        {
-            return "Custom speed unavailable: a write is in progress.";
-        }
-
-        return canChangeCustomSpeed
-            ? _customSpeedEnabled
-                ? $"Custom speed enabled at {_customSpeedRpm} RPM."
-                : "Custom speed is disabled."
-            : "Custom speed unavailable: current state does not permit writes.";
+        error = string.Empty;
+        return true;
     }
 
-    private string GetDeviceFeaturesAvailabilityText(bool canChangeDeviceFeatures)
+    internal static bool IsManualGearRpmOrderValid(
+        IReadOnlyDictionary<string, Dictionary<string, int>>? values,
+        string editedGear,
+        string editedLevel,
+        int editedRpm)
     {
-        if (!_ipc.IsConnected)
+        var previous = 0;
+        foreach (var gear in ManualGearValues)
         {
-            return "Device features unavailable: THRM Core is not connected.";
+            foreach (var level in ManualLevelValues)
+            {
+                var rpm = gear == editedGear && level == editedLevel
+                    ? editedRpm
+                    : ResolveManualGearRpm(values, gear, level);
+                if (rpm < previous)
+                {
+                    return false;
+                }
+
+                previous = rpm;
+            }
         }
 
-        if (!_deviceStateKnown || !_configKnown)
-        {
-            return "Device features unavailable: waiting for synchronized device and configuration state.";
-        }
-
-        if (!_deviceConnected)
-        {
-            return "Device features unavailable: connect a device first.";
-        }
-
-        if (_writeInProgress)
-        {
-            return "Device features unavailable: a write is in progress.";
-        }
-
-        return canChangeDeviceFeatures
-            ? IsBs1
-                ? "This device supports power-on start."
-                : "Device features are ready."
-            : "Device features unavailable: current state does not permit writes.";
-    }
-
-    private string GetManualControlAvailabilityText(bool canChangeManual)
-    {
-        if (!_ipc.IsConnected)
-        {
-            return "Manual control unavailable: THRM Core is not connected.";
-        }
-
-        if (!_deviceStateKnown || !_configKnown)
-        {
-            return "Manual control unavailable: waiting for synchronized device and configuration state.";
-        }
-
-        if (!_deviceConnected)
-        {
-            return "Manual control unavailable: connect a device first.";
-        }
-
-        if (_writeInProgress)
-        {
-            return "Manual control unavailable: a write is in progress.";
-        }
-
-        if (_autoControl)
-        {
-            return "Manual control unavailable: Auto control is enabled.";
-        }
-
-        if (_customSpeedEnabled)
-        {
-            return "Manual control unavailable: Custom speed is enabled.";
-        }
-
-        return canChangeManual
-            ? IsBs1
-                ? "Ready. BS1 uses fixed presets; level not applicable."
-                : "Ready. Choose a preset and select Apply."
-            : "Manual control unavailable: current state does not permit writes.";
+        return true;
     }
 
     private bool IsBs1 => string.Equals(_deviceModel, "BS1", StringComparison.OrdinalIgnoreCase);
@@ -2989,20 +5123,6 @@ public partial class MainWindow : Window
     {
         SelectCoreValue(ManualGearComboBox, ManualGearValues, _manualGear);
         SelectCoreValue(ManualLevelComboBox, ManualLevelValues, _manualLevel);
-    }
-
-    private void UpdateManualAppliedText()
-    {
-        if (string.IsNullOrWhiteSpace(_manualGear))
-        {
-            ManualAppliedText.Text = "Applied preset: —";
-            return;
-        }
-
-        var gear = ManualGearLabel(_manualGear);
-        ManualAppliedText.Text = IsBs1
-            ? $"Applied preset: {gear}; fixed presets (level not applicable)."
-            : $"Applied preset: {gear} / {ManualLevelDisplay(_manualLevel)}";
     }
 
     private static void SelectCoreValue(ComboBox comboBox, string[] values, string? value) =>
@@ -3022,23 +5142,6 @@ public partial class MainWindow : Window
         var index = comboBox.SelectedIndex;
         return index >= 0 && index < values.Length ? values[index] : null;
     }
-
-    private static string ManualGearLabel(string? value) => value switch
-    {
-        "静音" => "Quiet",
-        "标准" => "Standard",
-        "强劲" => "Strong",
-        "超频" => "Overclock",
-        _ => "—",
-    };
-
-    private static string ManualLevelDisplay(string? value) => value switch
-    {
-        "低" => "Low",
-        "中" => "Medium",
-        "高" => "High",
-        _ => "—",
-    };
 
     private static string EmptyDash(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
